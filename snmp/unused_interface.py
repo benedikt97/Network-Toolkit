@@ -18,11 +18,11 @@ def getsnmptable(ip, community):
                         CommunityData(community, mpModel=0),
                         UdpTransportTarget((ip, 161)),
                         ContextData(),
-                        ObjectType(ObjectIdentity('IF-MIB', 'ifDescr')),
-						ObjectType(ObjectIdentity('IF-MIB', 'ifAlias')),
-                        ObjectType(ObjectIdentity('IF-MIB', 'ifAdminStatus')),
-                        ObjectType(ObjectIdentity('IF-MIB', 'ifOperStatus')),
-						ObjectType(ObjectIdentity('IF-MIB', 'ifLastChange')),
+                        ObjectType(ObjectIdentity('1.3.6.1.2.1.2.2.1.2')),
+						ObjectType(ObjectIdentity('1.3.6.1.2.1.2.2.1.18')),
+                        ObjectType(ObjectIdentity('1.3.6.1.2.1.2.2.1.7')),
+                        ObjectType(ObjectIdentity('1.3.6.1.2.1.2.2.1.8')),
+						ObjectType(ObjectIdentity('1.3.6.1.2.1.2.2.1.9')),
                         lexicographicMode=False, lookupValues=True, lookupNames=True)
 		
 	
