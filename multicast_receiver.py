@@ -6,7 +6,7 @@ import os
 MCAST_GRP = '239.1.47.11'
 MCAST_PORT = 5001
 IS_ALL_GROUPS = False
-INTERFACE = '10.30.47.10'
+INTERFACE = '192.168.100.10'
 
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
