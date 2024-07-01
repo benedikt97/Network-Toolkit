@@ -1,14 +1,6 @@
 # Simulation eines Verbindungstrecke mit schlechter Metrik
 
-
-                ----------------------
-                |        Linux PC    |
-                |           |        |
-                |           |        |
-  Server------- |eth0==NIC-CARD==eth1|-------------Client
-                |                    |
-                ----------------------
-                Virtual-Trashy-Network
+![Alt text](drawing.png?raw=true "Title")
                 
                 
 ## Bind eth0 and eth1 to a bridge
