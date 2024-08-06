@@ -4,9 +4,9 @@ import struct
 import os
 
 
-UDP_PORT = 5001
+UDP_PORT = 5002
 IS_ALL_IPS = True
-INTERFACE = '10.30.47.10'
+INTERFACE = '192.168.30.16'
 
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)

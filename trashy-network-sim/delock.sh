@@ -22,8 +22,8 @@ ip link set enx88c9b3beeb69 up
 ip link set enx88c9b3beeb6a up
 
 
-sudo tc qdisc add dev enx88c9b3beeb6b root netem delay 100ms 50ms distribution normal
-sudo tc qdisc add dev enx88c9b3beeb6c root netem delay 100ms 50ms distribution normal
+sudo tc qdisc add dev enx88c9b3beeb6b root netem delay 15ms 5ms distribution normal
+sudo tc qdisc add dev enx88c9b3beeb6c root netem delay 15ms 5ms distribution normal
 
-sudo tc qdisc add dev enx88c9b3beeb69 root netem loss 2% 80%
-sudo tc qdisc add dev enx88c9b3beeb6a root netem loss 2% 80%
+sudo tc qdisc add dev enx88c9b3beeb69 root netem loss 1% 80%
+sudo tc qdisc add dev enx88c9b3beeb6a root netem loss 1% 80%
