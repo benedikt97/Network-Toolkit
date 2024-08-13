@@ -21,7 +21,7 @@ def start_server(port):
 
         # Empfange Daten vom Client
         while True:
-            data = client_socket.recv(1024).decode(utf-8)
+            data = client_socket.recv(1024).decode('utf-8')
             print(f"Empfangene Daten: {data}")
 
 
