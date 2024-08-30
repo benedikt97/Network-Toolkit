@@ -2,24 +2,22 @@
 import socket
 import struct
 import os
+import sys
 
-MCAST_GRP = '239.1.47.11'
-MCAST_PORT = 5001
+if len(sys.argv) != 4:
+   print('multicast_receiver.py [INTERFACE] [MCAST_GRP] [MCAST_PORT]')
+   exit()
+
+MCAST_GRP = sys.argv[2]
+MCAST_PORT = int(sys.argv[3])
 IS_ALL_GROUPS = False
-INTERFACE = '192.168.100.10'
+INTERFACE = sys.argv[1]
 
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-sock.setsockopt(socket.SOL_IP, socket.IP_ADD_MEMBERSHIP,
-                    socket.inet_aton(MCAST_GRP) + socket.inet_aton(INTERFACE))
 
-if IS_ALL_GROUPS:
-    # on this port, receives ALL multicast groups
-    sock.bind(('', MCAST_PORT))
-else:
-    # on this port, listen ONLY to MCAST_GRP
-    sock.bind((MCAST_GRP, MCAST_PORT))
+sock.bind((MCAST_GRP, MCAST_PORT))
 mreq = struct.pack("4sl", socket.inet_aton(MCAST_GRP), socket.INADDR_ANY)
 
 sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)

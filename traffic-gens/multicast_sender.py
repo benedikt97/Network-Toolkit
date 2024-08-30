@@ -3,14 +3,18 @@
 import socket
 import struct
 import time
+import sys    
 
+if len(sys.argv) != 4:
+   print('multicast_sender.py [INTERFACE] [MCAST_GRP] [MCAST_PORT]')
+   exit()
 
 
 if __name__ == '__main__':
   i = 1
-  MCAST_GRP = '239.1.47.11'
-  MCAST_PORT = 5001
-  INTERFACE = '172.30.0.10'
+  MCAST_GRP = sys.argv[2]
+  MCAST_PORT = int(sys.argv[3])
+  INTERFACE = sys.argv[1]
 
   sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
   sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 32)

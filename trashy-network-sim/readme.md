@@ -9,7 +9,7 @@ ip link set eth1 down
 
 brctl addbr br-trash
 brctl addif br-trash eth0
-brctö addif br-trash eth1
+brctl addif br-trash eth1
 
 ip link set br-trash up
 ip link set eth0 up
