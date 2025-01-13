@@ -28,4 +28,4 @@ if __name__ == '__main__':
     sock.sendto(m, (MCAST_GRP, MCAST_PORT))
     i += 1
     print('sending')
-    time.sleep(0.01)
+    time.sleep(0.001)
