@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nagios Button Monitor</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        .button-container { margin-top: 20px; }
+        button { padding: 10px 20px; margin: 10px; font-size: 16px; cursor: pointer; }
+        .status { margin-top: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h2>Nagios HTTP-Status Monitor</h2>
+    <div class="button-container">
+        <button onclick="checkStatus('button1', 'http://example.com/health1')">Button 1</button>
+        <button onclick="checkStatus('button2', 'http://example.com/health2')">Button 2</button>
+        <button onclick="checkStatus('button3', 'http://example.com/health3')">Button 3</button>
+    </div>
+    <div id="status-container" class="status"></div>
+
+    <script>
+        function checkStatus(buttonId, url) {
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    let statusText = data.status === "OK" ? "✅ OK" : "❌ NICHT OK";
+                    document.getElementById("status-container").innerHTML = `Status von ${buttonId}: ${statusText}`;
+                })
+                .catch(error => {
+                    document.getElementById("status-container").innerHTML = `Fehler: ${error}`;
+                });
+        }
+    </script>
+</body>
+</html>
