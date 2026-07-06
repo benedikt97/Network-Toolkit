@@ -287,7 +287,7 @@ if [[ "$MODE" == "test" ]]; then
     else
         print_header "DHCP Test on ${INTERFACE}"
         timeout 5 tcpdump -c 2 -v -nni "$INTERFACE" port 68 and port 67 &
-        timeout 5 dhclient -cf "${SCRIPT_DIR}/isc_dhcp6_ap_client.conf" -d -v -sf /bin/true -lf /tmp/test.leases "$INTERFACE" 2>/dev/null
+        timeout 5 dhclient -cf "${SCRIPT_DIR}/isc_dhcp6_ap_client.conf" -6 -d -v -sf /bin/true -lf /tmp/test.leases "$INTERFACE" 2>/dev/null
         [[ -n "$CVCUE" ]] && { print_header "CV-CUE Connectivity"; nc -zv "$CVCUE" 3851; }
     fi
     exit 0
