@@ -113,6 +113,10 @@ while [[ $# -gt 0 ]]; do
             export MATCHSTRING="$2"
             shift 2 
             ;;
+        -tftp | --tftp )
+            export TFTP="$2"
+            shift 2 
+            ;;
         -h | --help )
             show_help
             exit 0
