@@ -1,7 +1,21 @@
 #!/bin/bash
+
+# =============================================================================
+# Arista ZTP DHCP Utility
+#
+# Generates DHCP configuration, installs ISC DHCP configuration, or emulates
+# Arista devices while testing DHCP connectivity.
+# =============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Colors (disabled for non-TTY)
+# =============================================================================
+# Terminal Presentation
+#
+# Colours are disabled for redirected output so generated configuration can be
+# copied directly into a DHCP server configuration file.
+# =============================================================================
+
 if [[ -t 1 ]]; then
     BOLD='\033[1m' DIM='\033[2m' RED='\033[0;31m' GREEN='\033[0;32m'
     YELLOW='\033[0;33m' CYAN='\033[0;36m' RESET='\033[0m'
@@ -30,7 +44,13 @@ BANNER
     echo ""
 }
 
-# Validation
+# =============================================================================
+# Input Validation and Network Helpers
+#
+# These functions validate interactive and command-line input, then derive the
+# IPv4 values consumed by the selected configuration template.
+# =============================================================================
+
 validate_ipv4() {
     local IFS='.'; read -ra o <<< "$1"
     [[ ${#o[@]} -ne 4 ]] && return 1
@@ -89,7 +109,12 @@ network_base() {
     echo "${o[0]}.${o[1]}.${o[2]}"
 }
 
-# DHCPv6 Option 17 generator (replaces isc_dhcp6_generate_option17.py)
+# =============================================================================
+# DHCP Vendor Option Encoders
+#
+# Vendor discovery payloads are encoded here for ISC DHCP, EOS, and AVD output.
+# =============================================================================
+
 generate_option17() {
     local server="$1" magic="SPECTRATALK"
     local sub1_len sub4_len
@@ -117,7 +142,13 @@ generate_eos_option17() {
     printf '000042050001%s%s0004%s%s' "$server_len" "$(ascii_to_hex "$server")" "$magic_len" "$(ascii_to_hex "$magic")"
 }
 
-# Config generator (envsubst on template files)
+# =============================================================================
+# Configuration Rendering
+#
+# Device-specific snippets are assembled first and substituted into the
+# platform and IP-version template selected by the user.
+# =============================================================================
+
 generate_config() {
     export NETWORK_ADDR="${NETWORK%%/*}"
     export WIFI_BLOCK="" TFTP_BLOCK="" EOS_WIFI_BLOCK="" EOS_TFTP_BLOCK="" AVD_WIFI_BLOCK="" AVD_TFTP_BLOCK=""
@@ -164,7 +195,13 @@ generate_config() {
     envsubst < "$template"
 }
 
-# Help
+# =============================================================================
+# Help, Command Rendering, and Interactive Workflow
+#
+# Generate and install share the same data collection. Test mode branches early
+# because it only needs an IP version, device identity, and network interface.
+# =============================================================================
+
 show_help() {
     banner
     echo -e "${BOLD}USAGE${RESET}"
@@ -201,7 +238,6 @@ show_help() {
     exit 0
 }
 
-# Interactive prompts
 prompt_value() {
     local prompt_text="$1" default_val="$2" var_name="$3" validator="$4" required="${5:-true}"
     while true; do
@@ -389,6 +425,13 @@ interactive_setup() {
     echo ""
 }
 
+# =============================================================================
+# DHCP Client Test Mode
+#
+# dhcpcd runs in test mode, so it sends and captures DHCP exchanges without
+# applying the offered lease to the selected interface.
+# =============================================================================
+
 run_test_mode() {
     [[ -n "$INTERFACE" ]] || { print_error "Test mode requires -interface."; exit 1; }
     [[ "$DEVICE_TYPE" != "both" ]] || DEVICE_TYPE="wifi"
@@ -451,6 +494,13 @@ run_test_mode() {
     fi
 }
 
+# =============================================================================
+# ISC DHCP Installation Mode
+#
+# The generated configuration is validated in the target directory before the
+# selected ISC DHCP service is restarted.
+# =============================================================================
+
 detect_dhcp_service() {
     local service
     for service in isc-dhcp-server dhcpd; do
@@ -496,7 +546,13 @@ run_install_mode() {
     print_success "Configuration installed and ${service} restarted."
 }
 
-# Flag parsing
+# =============================================================================
+# Command-line Parsing and Main Dispatch
+#
+# Test mode runs after basic argument validation. Generate and install continue
+# through shared default derivation and input validation below.
+# =============================================================================
+
 MODE="generate"
 PLATFORM="isc"
 DEVICE_TYPE="both"
@@ -555,7 +611,10 @@ if [[ "$MODE" == "test" ]]; then
     exit 0
 fi
 
-# Auto-derive defaults & validate
+# =============================================================================
+# Generate / Install Input Completion and Validation
+# =============================================================================
+
 if [[ "$IPVERSION" == "4" ]]; then
     if [[ -n "$NETWORK" ]]; then
         local_prefix="${NETWORK##*/}"
@@ -603,7 +662,13 @@ else
     fi
 fi
 
-# Output config
+# =============================================================================
+# Rendered Output or Installation
+#
+# Install mode owns its preview and confirmation. Generate mode prints the
+# selected platform's configuration to standard output.
+# =============================================================================
+
 show_config() {
     echo -e "${DIM}─────────────────────────────────────────────${RESET}"
     echo "$1"
