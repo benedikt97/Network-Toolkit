@@ -355,6 +355,7 @@ run_test_mode() {
     print_success "Required DHCP tools found"
 
     local client_config capture_filter lease_file capture_pid dhcp_vci
+    local -a dhclient_vci_args=()
     lease_file=$(mktemp /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create temporary lease file."; exit 1; }
     trap 'rm -f "$lease_file"' EXIT
 
@@ -383,13 +384,19 @@ run_test_mode() {
     fi
     [[ -r "$client_config" ]] || { print_error "DHCP client config not found: $client_config"; exit 1; }
 
+    if [[ "$IPVERSION" == "4" ]] && dhclient --help 2>&1 | grep -q -- '-V <vendor-class-identifier>'; then
+        dhclient_vci_args=(-V "$dhcp_vci")
+    elif [[ "$IPVERSION" == "4" ]]; then
+        print_warn "This dhclient does not support -V; using the vendor-class setting from ${client_config}."
+    fi
+
     print_header "DHCP Exchange on ${INTERFACE}"
     timeout 8 tcpdump -c 6 -v -nni "$INTERFACE" $capture_filter &
     capture_pid=$!
     if [[ "$IPVERSION" == "4" ]]; then
         # -V reliably emits DHCP option 60; some dhclient builds omit the
         # vendor-class from a config-file send statement.
-        timeout 8 dhclient -V "$dhcp_vci" -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCP client exited without a lease."
+        timeout 8 dhclient "${dhclient_vci_args[@]}" -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCP client exited without a lease."
     else
         timeout 8 dhclient -cf "$client_config" -6 -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCPv6 client exited without a lease."
     fi
