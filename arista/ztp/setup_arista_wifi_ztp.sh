@@ -354,10 +354,11 @@ run_test_mode() {
     command -v timeout &>/dev/null || { print_error "timeout command required"; exit 1; }
     print_success "Required DHCP tools found"
 
-    local client_config capture_filter lease_file capture_pid dhcp_vci
+    local client_config capture_filter lease_dir lease_file capture_pid dhcp_vci dhcp_client
     local -a dhclient_vci_args=()
-    lease_file=$(mktemp /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create temporary lease file."; exit 1; }
-    trap 'rm -f "$lease_file"' EXIT
+    lease_dir=$(mktemp -d /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create a temporary lease directory."; exit 1; }
+    lease_file="${lease_dir}/dhclient.leases"
+    trap 'rm -f "$lease_file"; rmdir "$lease_dir" 2>/dev/null || true' EXIT
 
     if [[ "$IPVERSION" == "4" ]]; then
         if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
@@ -384,19 +385,27 @@ run_test_mode() {
     fi
     [[ -r "$client_config" ]] || { print_error "DHCP client config not found: $client_config"; exit 1; }
 
+    dhcp_client="dhclient"
     if [[ "$IPVERSION" == "4" ]] && dhclient --help 2>&1 | grep -q -- '-V <vendor-class-identifier>'; then
         dhclient_vci_args=(-V "$dhcp_vci")
+    elif [[ "$IPVERSION" == "4" ]] && command -v dhcpcd &>/dev/null; then
+        dhcp_client="dhcpcd"
+        print_warn "This dhclient does not support -V; using dhcpcd test mode to send option 60."
     elif [[ "$IPVERSION" == "4" ]]; then
-        print_warn "This dhclient does not support -V; using the vendor-class setting from ${client_config}."
+        print_error "This dhclient cannot force option 60 and dhcpcd is not installed."
+        print_info "Install dhcpcd or use a dhclient build with -V support."
+        exit 1
     fi
 
     print_header "DHCP Exchange on ${INTERFACE}"
     timeout 8 tcpdump -c 6 -v -nni "$INTERFACE" $capture_filter &
     capture_pid=$!
     if [[ "$IPVERSION" == "4" ]]; then
-        # -V reliably emits DHCP option 60; some dhclient builds omit the
-        # vendor-class from a config-file send statement.
-        timeout 8 dhclient "${dhclient_vci_args[@]}" -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCP client exited without a lease."
+        if [[ "$dhcp_client" == "dhcpcd" ]]; then
+            timeout 8 dhcpcd -4 -T -B -i "$dhcp_vci" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without a lease."
+        else
+            timeout 8 dhclient "${dhclient_vci_args[@]}" -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCP client exited without a lease."
+        fi
     else
         timeout 8 dhclient -cf "$client_config" -6 -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCPv6 client exited without a lease."
     fi
