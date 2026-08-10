@@ -160,7 +160,7 @@ show_help() {
     echo -e "${BOLD}GENERAL OPTIONS${RESET}"
     echo -e "  ${CYAN}-h${RESET}              Show this help message"
     echo -e "  ${CYAN}-i${RESET}              Launch guided interactive setup"
-    echo -e "  ${CYAN}-mode${RESET}           ${DIM}<generate|test>${RESET}      Generate configuration or test DHCP"
+    echo -e "  ${CYAN}-mode${RESET}           ${DIM}<generate|install|test>${RESET} Generate, install, or test DHCP"
     echo -e "  ${CYAN}-interface${RESET}      ${DIM}<NAME>${RESET}               Interface for test mode"
     echo -e "  ${CYAN}-devices${RESET}        ${DIM}<wifi|dcs-ccs|both>${RESET}  Device type / test client identity (default: both)"
     echo -e "  ${CYAN}-platform${RESET}       ${DIM}<isc|eos|avd>${RESET}        DHCP configuration target (default: isc)"
@@ -174,6 +174,7 @@ show_help() {
     echo -e "  ${CYAN}-range-begin${RESET}    ${DIM}<IP>${RESET}       ${CYAN}-range-end${RESET}    ${DIM}<IP>${RESET}"
     echo -e "  ${CYAN}-matchstring${RESET}    ${DIM}<PATTERN>${RESET}  ${CYAN}-tftp${RESET}         ${DIM}<IP>${RESET} (optional)"
     echo -e "  ${CYAN}-tftp-path${RESET}      ${DIM}<PATH>${RESET}     ZTP file path (default: ztp.conf)"
+    echo -e "  ${CYAN}-config-path${RESET}    ${DIM}<PATH>${RESET}     ISC DHCP config path for install mode"
     echo ""
     echo -e "${BOLD}EXAMPLES${RESET}"
     echo -e "  ${DIM}# IPv4 — minimal (netmask, gateway, range auto-derived from CIDR)${RESET}"
@@ -225,6 +226,7 @@ print_summary() {
     [[ -n "$MATCHSTRING" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "VCI Match:" "$MATCHSTRING"
     [[ -n "$TFTP" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "TFTP Server:" "$TFTP"
     [[ -n "$TFTP" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "TFTP File:" "${TFTP_PATH:-ztp.conf}"
+    [[ "$MODE" == "install" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "Install Target:" "${CONFIG_PATH:-/etc/dhcp/dhcpd.conf}"
     echo ""
     printf "  ${BOLD}Equivalent command:${RESET}\n"
     printf "  %s\n" "$(build_command)"
@@ -250,6 +252,9 @@ build_command() {
     if [[ -n "$TFTP" ]]; then
         args+=(-tftp "$TFTP" -tftp-path "${TFTP_PATH:-ztp.conf}")
     fi
+    if [[ "$MODE" == "install" ]]; then
+        args+=(-mode install -config-path "${CONFIG_PATH:-/etc/dhcp/dhcpd.conf}")
+    fi
 
     printf -v command '%q' "$0"
     for arg in "${args[@]}"; do
@@ -264,8 +269,9 @@ interactive_setup() {
 
     print_header "Step 1: Operation"
     echo -e "\n  ${GREEN}generate${RESET}  Generate a DHCP configuration"
+    echo -e "  ${YELLOW}install${RESET}   Generate, install, and restart ISC DHCP"
     echo -e "  ${CYAN}test${RESET}      Request a DHCP lease and capture the exchange\n"
-    prompt_choice "Mode" "generate/test" "generate" "MODE"
+    prompt_choice "Mode" "generate/install/test" "generate" "MODE"
 
     print_header "Step 2: IP Version"
     echo ""
@@ -333,6 +339,14 @@ interactive_setup() {
         [[ -n "$TFTP" ]] && prompt_value "TFTP ZTP file path" "ztp.conf" "TFTP_PATH" "" "false"
     fi
 
+    if [[ "$MODE" == "install" ]]; then
+        print_header "Step 7: Install Target"
+        echo ""
+        command -v dhcpd &>/dev/null || { print_error "ISC DHCP server (dhcpd) is not installed."; exit 1; }
+        print_success "ISC DHCP server found"
+        prompt_value "ISC DHCP configuration path" "/etc/dhcp/dhcpd.conf" "CONFIG_PATH"
+    fi
+
     [[ "$CVCUE" == "cloud" ]] && export CVCUE="redirector.online.spectraguard.net"
     print_summary
 
@@ -349,23 +363,20 @@ run_test_mode() {
 
     print_header "DHCP Connectivity Test"
     print_info "Interface: ${INTERFACE}  |  IPv${IPVERSION}  |  Client: ${DEVICE_TYPE}"
-    command -v dhclient &>/dev/null || { print_error "dhclient required: apt install isc-dhcp-client"; exit 1; }
+    command -v dhcpcd &>/dev/null || { print_error "dhcpcd required: install dhcpcd"; exit 1; }
     command -v tcpdump &>/dev/null || { print_error "tcpdump required: apt install tcpdump"; exit 1; }
     command -v timeout &>/dev/null || { print_error "timeout command required"; exit 1; }
     print_success "Required DHCP tools found"
 
-    local client_config capture_filter lease_dir lease_file capture_pid dhcp_vci dhcp_client
-    local -a dhclient_vci_args=()
-    lease_dir=$(mktemp -d /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create a temporary lease directory."; exit 1; }
-    lease_file="${lease_dir}/dhclient.leases"
-    trap 'rm -f "$lease_file"; rmdir "$lease_dir" 2>/dev/null || true' EXIT
+    local capture_filter test_dir dhcpcd_config capture_pid dhcp_vci dhcp6_vendor_class
+    test_dir=$(mktemp -d /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create a temporary test directory."; exit 1; }
+    dhcpcd_config="${test_dir}/dhcpcd.conf"
+    trap 'rm -f "$dhcpcd_config"; rmdir "$test_dir" 2>/dev/null || true' EXIT
 
     if [[ "$IPVERSION" == "4" ]]; then
         if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
-            client_config="${SCRIPT_DIR}/configs/isc_dhcp_dcs_client.conf"
             dhcp_vci="Arista"
         else
-            client_config="${SCRIPT_DIR}/configs/isc_dhcp_ap_client.conf"
             dhcp_vci="ARISTA-AP-430"
         fi
         capture_filter='port 67 or port 68'
@@ -377,37 +388,22 @@ run_test_mode() {
         fi
     else
         if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
-            client_config="${SCRIPT_DIR}/configs/isc_dhcp6_dcs_client.conf"
+            dhcp6_vendor_class="Arista"
         else
-            client_config="${SCRIPT_DIR}/configs/isc_dhcp6_ap_client.conf"
+            dhcp6_vendor_class="ARISTA-AP-C-430"
         fi
         capture_filter='ip6 and udp portrange 546-547'
-    fi
-    [[ -r "$client_config" ]] || { print_error "DHCP client config not found: $client_config"; exit 1; }
-
-    dhcp_client="dhclient"
-    if [[ "$IPVERSION" == "4" ]] && dhclient --help 2>&1 | grep -q -- '-V <vendor-class-identifier>'; then
-        dhclient_vci_args=(-V "$dhcp_vci")
-    elif [[ "$IPVERSION" == "4" ]] && command -v dhcpcd &>/dev/null; then
-        dhcp_client="dhcpcd"
-        print_warn "This dhclient does not support -V; using dhcpcd test mode to send option 60."
-    elif [[ "$IPVERSION" == "4" ]]; then
-        print_error "This dhclient cannot force option 60 and dhcpcd is not installed."
-        print_info "Install dhcpcd or use a dhclient build with -V support."
-        exit 1
+        printf 'vendclass 16901 "%s"\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
+        print_info "DHCPv6 vendor class (option 16): ${dhcp6_vendor_class}"
     fi
 
     print_header "DHCP Exchange on ${INTERFACE}"
     timeout 8 tcpdump -c 6 -v -nni "$INTERFACE" $capture_filter &
     capture_pid=$!
     if [[ "$IPVERSION" == "4" ]]; then
-        if [[ "$dhcp_client" == "dhcpcd" ]]; then
-            timeout 8 dhcpcd -4 -T -B -i "$dhcp_vci" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without a lease."
-        else
-            timeout 8 dhclient "${dhclient_vci_args[@]}" -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCP client exited without a lease."
-        fi
+        timeout 8 dhcpcd -4 -T -B -i "$dhcp_vci" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without a lease."
     else
-        timeout 8 dhclient -cf "$client_config" -6 -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCPv6 client exited without a lease."
+        timeout 8 dhcpcd -6 -T -B -f "$dhcpcd_config" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without an IPv6 lease."
     fi
     wait "$capture_pid" 2>/dev/null || true
 
@@ -416,6 +412,51 @@ run_test_mode() {
         print_header "CV-CUE Connectivity"
         nc -zv "$CVCUE" 3851 || print_warn "Could not reach ${CVCUE}:3851"
     fi
+}
+
+detect_dhcp_service() {
+    local service
+    for service in isc-dhcp-server dhcpd; do
+        if systemctl cat "$service" &>/dev/null; then
+            printf '%s' "$service"
+            return 0
+        fi
+    done
+    return 1
+}
+
+run_install_mode() {
+    [[ "$PLATFORM" == "isc" ]] || { print_error "Install mode supports only the ISC DHCP platform (-platform isc)."; exit 1; }
+    [[ $EUID -eq 0 ]] || { print_error "Install mode must be run as root (for example: sudo $0 ...)."; exit 1; }
+    command -v dhcpd &>/dev/null || { print_error "ISC DHCP server (dhcpd) is not installed."; exit 1; }
+    command -v systemctl &>/dev/null || { print_error "systemctl is required to restart the ISC DHCP server."; exit 1; }
+
+    local service config_dir temp_config dhcpd_args=()
+    service=$(detect_dhcp_service) || { print_error "Could not find an ISC DHCP systemd service (isc-dhcp-server or dhcpd)."; exit 1; }
+    CONFIG_PATH="${CONFIG_PATH:-/etc/dhcp/dhcpd.conf}"
+    config_dir=$(dirname "$CONFIG_PATH")
+    [[ -d "$config_dir" ]] || { print_error "Configuration directory does not exist: $config_dir"; exit 1; }
+    [[ -w "$config_dir" ]] || { print_error "Configuration directory is not writable: $config_dir"; exit 1; }
+
+    print_header "Install ISC DHCP Configuration"
+    print_info "Target: ${CONFIG_PATH}  |  Service: ${service}"
+    show_config "$DHCP_CONFIG"
+    echo -en "  ${BOLD}Replace ${CONFIG_PATH} and restart ${service}?${RESET} ${DIM}[y/N]${RESET}: "
+    read -r confirm
+    [[ "$confirm" =~ ^[Yy] ]] || { print_warn "Aborted."; return; }
+
+    temp_config=$(mktemp "${config_dir}/.arista-ztp-dhcpd.XXXXXX") || { print_error "Could not create a temporary configuration file."; exit 1; }
+    printf '%s\n' "$DHCP_CONFIG" > "$temp_config"
+    [[ "$IPVERSION" == "6" ]] && dhcpd_args=(-6)
+    if ! dhcpd -t "${dhcpd_args[@]}" -cf "$temp_config"; then
+        rm -f "$temp_config"
+        print_error "Generated configuration failed dhcpd validation; existing configuration was not changed."
+        exit 1
+    fi
+    install -m 0644 "$temp_config" "$CONFIG_PATH"
+    rm -f "$temp_config"
+    systemctl restart "$service"
+    print_success "Configuration installed and ${service} restarted."
 }
 
 # Flag parsing
@@ -441,6 +482,7 @@ while [[ $# -gt 0 ]]; do
         -matchstring)   export MATCHSTRING="$2";   shift 2 ;;
         -tftp)          export TFTP="$2";          shift 2 ;;
         -tftp-path)     export TFTP_PATH="$2";     shift 2 ;;
+        -config-path)   CONFIG_PATH="$2";          shift 2 ;;
         -interface)     INTERFACE="$2";            shift 2 ;;
         -i|--interactive) INTERACTIVE=true;        shift ;;
         -h|--help)      show_help ;;
@@ -451,8 +493,8 @@ done
 [[ "$INTERACTIVE" == true ]] && interactive_setup
 [[ "$CVCUE" == "cloud" ]] && export CVCUE="redirector.online.spectraguard.net"
 
-if [[ "$MODE" != "generate" && "$MODE" != "test" ]]; then
-    print_error "Mode must be generate or test (-mode generate|test)"
+if [[ "$MODE" != "generate" && "$MODE" != "install" && "$MODE" != "test" ]]; then
+    print_error "Mode must be generate, install, or test (-mode generate|install|test)"
     exit 1
 fi
 
@@ -532,6 +574,11 @@ show_config() {
 }
 
 DHCP_CONFIG=$(generate_config)
+
+if [[ "$MODE" == "install" ]]; then
+    run_install_mode
+    exit 0
+fi
 
 if [[ "$PLATFORM" == "isc" ]]; then
     print_header "Generated ISC DHCP Configuration"
