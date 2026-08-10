@@ -1,0 +1,3 @@
+    tftp_server:
+      option_66_ipv4: ${TFTP}
+      file_ipv4: "http://${TFTP}/${TFTP_PATH}"

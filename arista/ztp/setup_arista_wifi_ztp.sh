@@ -145,54 +145,69 @@ generate_eos_option17() {
 # =============================================================================
 # Configuration Rendering
 #
-# Device-specific snippets are assembled first and substituted into the
-# platform and IP-version template selected by the user.
+# The configuration is assembled from platform, address-family, and optional
+# feature blocks. The master template intentionally only merges those blocks.
 # =============================================================================
 
+render_template() {
+    envsubst < "$1"
+}
+
+merge_template() {
+    local rendered
+    rendered=$(render_template "$1")
+    [[ -z "$rendered" ]] || CONFIG_BLOCKS+="${CONFIG_BLOCKS:+$'\n'}${rendered}"
+}
+
 generate_config() {
+    local blocks_dir="${SCRIPT_DIR}/templates/blocks"
+    local tftp_path
+
     export NETWORK_ADDR="${NETWORK%%/*}"
-    export WIFI_BLOCK="" TFTP_BLOCK="" EOS_WIFI_BLOCK="" EOS_TFTP_BLOCK="" AVD_WIFI_BLOCK="" AVD_TFTP_BLOCK=""
-    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
-        if [[ "$PLATFORM" == "isc" && "$IPVERSION" == "4" ]]; then
-            WIFI_BLOCK=$(printf 'option space arista;\noption arista.cv-cue-server code 1 = text;\noption arista.magic-string code 4 = text;\n\nclass "Arista-AP" {\n    match if option vendor-class-identifier ~= "%s";\n    vendor-option-space arista;\n    option arista.cv-cue-server "%s";\n    option arista.magic-string "SPECTRATALK";\n}\n' "$MATCHSTRING" "$CVCUE")
-        elif [[ "$PLATFORM" == "isc" ]]; then
-            WIFI_BLOCK=$(printf '  if substring(option dhcp6.vendor-class, 6, 15) ~= "%s" {\n    option dhcp6.vendor-opts "%s";\n    option dhcp6.bootfile-url "my-startup-config";\n  }' "$MATCHSTRING" "$MAGICSTRING")
-        elif [[ "$PLATFORM" == "eos" && "$IPVERSION" == "4" ]]; then
-            EOS_WIFI_BLOCK=$(printf '   !\n   vendor-option ipv4 Arista\n      sub-option 1 type string data "%s"\n      sub-option 4 type string data "SPECTRATALK"' "$CVCUE")
-        elif [[ "$PLATFORM" == "eos" ]]; then
-            EOS_WIFI_BLOCK=$(printf '      option 17 hex %s' "$(generate_eos_option17 "$CVCUE")")
-        fi
+    export CONFIG_BLOCKS=""
+
+    if [[ "$IPVERSION" == "6" && ( "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ) && "$PLATFORM" != "isc" ]]; then
+        export EOS_OPTION17
+        EOS_OPTION17=$(generate_eos_option17 "$CVCUE")
     fi
-    if [[ "$PLATFORM" == "avd" && ( "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ) ]]; then
-        if [[ "$IPVERSION" == "4" ]]; then
-            AVD_WIFI_BLOCK=$(printf '    # WiFi vendor discovery options for Arista access points.\n    ipv4_vendor_options:\n      - vendor_id: Arista\n        sub_options:\n          - code: 1\n            string: "%s"\n          - code: 4\n            string: "SPECTRATALK"' "$CVCUE")
-        else
-            AVD_WIFI_BLOCK=$(printf '    # DHCPv6 option 17 is emitted through the eos_cli escape hatch.\n    eos_cli: |-\n      option 17 hex %s' "$(generate_eos_option17 "$CVCUE")")
-        fi
-    fi
+
     if [[ ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]]; then
-        local tftp_path="${TFTP_PATH:-ztp.conf}"
+        tftp_path="${TFTP_PATH:-ztp.conf}"
         tftp_path="${tftp_path#/}"
-        if [[ "$PLATFORM" == "isc" ]]; then
-            TFTP_BLOCK=$(printf 'class "Arista-CCS" {\n    match if substring(option vendor-class-identifier, 0, 6) = "Arista";\n    option bootfile-name "http://%s/%s";\n}\n' "$TFTP" "$tftp_path")
-            export TFTP_BLOCK
-        elif [[ "$PLATFORM" == "eos" && "$IPVERSION" == "4" ]]; then
-            EOS_TFTP_BLOCK=$(printf '   tftp server option 66 ipv4 %s\n   tftp server file ipv4 http://%s/%s' "$TFTP" "$TFTP" "$tftp_path")
-            export EOS_TFTP_BLOCK
-        fi
+        export TFTP_PATH="$tftp_path"
     fi
-    if [[ "$PLATFORM" == "avd" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" && "$IPVERSION" == "4" ]]; then
-        AVD_TFTP_BLOCK=$(printf '    tftp_server:\n      option_66_ipv4: %s\n      file_ipv4: "http://%s/%s"' "$TFTP" "$TFTP" "$tftp_path")
-    fi
-    local template
+
     if [[ "$PLATFORM" == "isc" ]]; then
-        template="${SCRIPT_DIR}/templates/dhcpd_v${IPVERSION}.conf"
+        merge_template "${blocks_dir}/isc/header_v${IPVERSION}.conf"
+        merge_template "${blocks_dir}/isc/general.conf"
+        if [[ "$IPVERSION" == "4" ]]; then
+            [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/isc/wifi_v4.conf"
+            [[ ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/isc/tftp_v4.conf"
+            merge_template "${blocks_dir}/isc/subnet_v4.conf"
+        else
+            merge_template "${blocks_dir}/isc/vendor_options_v6.conf"
+            merge_template "${blocks_dir}/isc/dns_v6.conf"
+            merge_template "${blocks_dir}/isc/subnet_v6_open.conf"
+            [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/isc/wifi_v6.conf"
+            merge_template "${blocks_dir}/isc/subnet_v6_close.conf"
+        fi
     elif [[ "$PLATFORM" == "eos" ]]; then
-        template="${SCRIPT_DIR}/templates/eos_dhcp_v${IPVERSION}.conf"
+        merge_template "${blocks_dir}/eos/header_v${IPVERSION}.conf"
+        merge_template "${blocks_dir}/eos/server_v${IPVERSION}.conf"
+        if [[ "$IPVERSION" == "4" ]]; then
+            [[ ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/eos/tftp_v4.conf"
+            merge_template "${blocks_dir}/eos/subnet_v4.conf"
+            [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/eos/wifi_v4.conf"
+        else
+            merge_template "${blocks_dir}/eos/subnet_v6.conf"
+            [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/eos/wifi_v6.conf"
+        fi
     else
-        template="${SCRIPT_DIR}/templates/avd_dhcp_v${IPVERSION}.yml"
+        merge_template "${blocks_dir}/avd/header_v${IPVERSION}.yml"
+        [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/avd/wifi_v${IPVERSION}.yml"
+        [[ "$IPVERSION" == "4" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/avd/tftp_v4.yml"
     fi
-    envsubst < "$template"
+    render_template "${SCRIPT_DIR}/templates/master.template"
 }
 
 # =============================================================================

@@ -9,4 +9,3 @@ dhcp_servers:
         ranges:
           - start: ${NETWORK_ADDR}100
             end: ${NETWORK_ADDR}200
-${AVD_WIFI_BLOCK}

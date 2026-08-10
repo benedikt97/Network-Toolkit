@@ -11,5 +11,3 @@ dhcp_servers:
         ranges:
           - start: ${RANGESTART}
             end: ${RANGEEND}
-${AVD_WIFI_BLOCK}
-${AVD_TFTP_BLOCK}

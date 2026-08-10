@@ -1,0 +1,8 @@
+    # WiFi vendor discovery options for Arista access points.
+    ipv4_vendor_options:
+      - vendor_id: Arista
+        sub_options:
+          - code: 1
+            string: "${CVCUE}"
+          - code: 4
+            string: "SPECTRATALK"
