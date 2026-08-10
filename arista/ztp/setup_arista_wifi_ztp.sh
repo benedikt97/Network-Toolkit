@@ -402,6 +402,7 @@ run_test_mode() {
     print_success "Required DHCP tools found"
 
     local capture_filter test_dir dhcpcd_config capture_pid dhcp_vci dhcp6_vendor_class
+    local -a dhcpcd_request_args=()
     test_dir=$(mktemp -d /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create a temporary test directory."; exit 1; }
     dhcpcd_config="${test_dir}/dhcpcd.conf"
     trap 'rm -f "$dhcpcd_config"; rmdir "$test_dir" 2>/dev/null || true' EXIT
@@ -409,6 +410,8 @@ run_test_mode() {
     if [[ "$IPVERSION" == "4" ]]; then
         if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
             dhcp_vci="Arista"
+            dhcpcd_request_args=(-o tftp_server_name -o bootfile_name)
+            print_info "Requesting TFTP server (option 66) and bootfile name (option 67)"
         else
             dhcp_vci="ARISTA-AP-430"
         fi
@@ -426,7 +429,7 @@ run_test_mode() {
             dhcp6_vendor_class="ARISTA-AP-C-430"
         fi
         capture_filter='ip6 and udp portrange 546-547'
-        printf 'vendclass 16901 "%s"\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
+        printf 'vendclass 16901 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
         print_info "DHCPv6 vendor class (option 16): ${dhcp6_vendor_class}"
     fi
 
@@ -434,7 +437,7 @@ run_test_mode() {
     timeout 8 tcpdump -c 6 -v -nni "$INTERFACE" $capture_filter &
     capture_pid=$!
     if [[ "$IPVERSION" == "4" ]]; then
-        timeout 8 dhcpcd -4 -T -B -i "$dhcp_vci" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without a lease."
+        timeout 8 dhcpcd -4 -T -B -i "$dhcp_vci" "${dhcpcd_request_args[@]}" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without a lease."
     else
         timeout 8 dhcpcd -6 -T -B -f "$dhcpcd_config" -t 8 "$INTERFACE" || print_warn "dhcpcd exited without an IPv6 lease."
     fi
