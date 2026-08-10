@@ -429,8 +429,9 @@ run_test_mode() {
             dhcp6_vendor_class="ARISTA-AP-C-430"
         fi
         capture_filter='ip6 and udp portrange 546-547'
-        printf 'vendclass 16901 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
+        printf 'ia_na\nvendclass 16901 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
         print_info "DHCPv6 vendor class (option 16): ${dhcp6_vendor_class}"
+        print_info "Forcing a DHCPv6 IA_NA request (router advertisement has no DHCPv6 flags)"
     fi
 
     print_header "DHCP Exchange on ${INTERFACE}"
