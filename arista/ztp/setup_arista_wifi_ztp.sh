@@ -354,17 +354,20 @@ run_test_mode() {
     command -v timeout &>/dev/null || { print_error "timeout command required"; exit 1; }
     print_success "Required DHCP tools found"
 
-    local client_config capture_filter lease_file capture_pid
+    local client_config capture_filter lease_file capture_pid dhcp_vci
     lease_file=$(mktemp /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create temporary lease file."; exit 1; }
     trap 'rm -f "$lease_file"' EXIT
 
     if [[ "$IPVERSION" == "4" ]]; then
         if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
             client_config="${SCRIPT_DIR}/configs/isc_dhcp_dcs_client.conf"
+            dhcp_vci="Arista"
         else
             client_config="${SCRIPT_DIR}/configs/isc_dhcp_ap_client.conf"
+            dhcp_vci="ARISTA-AP-430"
         fi
         capture_filter='port 67 or port 68'
+        print_info "DHCPv4 vendor class (option 60): ${dhcp_vci}"
         if [[ "$DEVICE_TYPE" == "wifi" ]]; then
             command -v nslookup &>/dev/null || { print_error "nslookup required: apt install dnsutils"; exit 1; }
             print_header "DNS Lookup"
@@ -384,9 +387,11 @@ run_test_mode() {
     timeout 8 tcpdump -c 6 -v -nni "$INTERFACE" $capture_filter &
     capture_pid=$!
     if [[ "$IPVERSION" == "4" ]]; then
-        timeout 8 dhclient -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" 2>/dev/null || print_warn "DHCP client exited without a lease."
+        # -V reliably emits DHCP option 60; some dhclient builds omit the
+        # vendor-class from a config-file send statement.
+        timeout 8 dhclient -V "$dhcp_vci" -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCP client exited without a lease."
     else
-        timeout 8 dhclient -cf "$client_config" -6 -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" 2>/dev/null || print_warn "DHCPv6 client exited without a lease."
+        timeout 8 dhclient -cf "$client_config" -6 -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" || print_warn "DHCPv6 client exited without a lease."
     fi
     wait "$capture_pid" 2>/dev/null || true
 
