@@ -60,14 +60,28 @@ validate_cidr() {
 validate_netmask() {
     validate_ipv4 "$1" || return 1
     local IFS='.'; read -ra o <<< "$1"
-    local inv=$(( ~((o[0]<<24)+(o[1]<<16)+(o[2]<<8)+o[3]) & 0xFFFFFFFF ))
+    local address=$(( o[0] * 16777216 + o[1] * 65536 + o[2] * 256 + o[3] ))
+    local inv=$(( 0xFFFFFFFF - address ))
     (( (inv & (inv + 1)) == 0 ))
 }
 
 # CIDR helpers
 cidr_to_netmask() {
-    local mask=$(( 0xFFFFFFFF << (32 - $1) & 0xFFFFFFFF ))
-    printf "%d.%d.%d.%d" $(( (mask>>24)&0xFF )) $(( (mask>>16)&0xFF )) $(( (mask>>8)&0xFF )) $(( mask&0xFF ))
+    local prefix="$1" index
+    local -a octets=(0 0 0 0)
+    local -a partial_masks=(0 128 192 224 240 248 252 254)
+
+    for ((index = 0; index < 4; index++)); do
+        if (( prefix >= 8 )); then
+            octets[index]=255
+            prefix=$(( prefix - 8 ))
+        elif (( prefix > 0 )); then
+            octets[index]=${partial_masks[prefix]}
+            prefix=0
+        fi
+    done
+
+    printf '%s.%s.%s.%s' "${octets[0]}" "${octets[1]}" "${octets[2]}" "${octets[3]}"
 }
 
 network_base() {
@@ -228,12 +242,24 @@ print_summary() {
     [[ -n "$TFTP" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "TFTP File:" "${TFTP_PATH:-ztp.conf}"
     [[ "$MODE" == "install" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "Install Target:" "${CONFIG_PATH:-/etc/dhcp/dhcpd.conf}"
     echo ""
-    printf "  ${BOLD}Equivalent command:${RESET}\n"
-    printf "  %s\n" "$(build_command)"
+    print_equivalent_command
     echo ""
 }
 
 build_command() {
+    if [[ "$MODE" == "test" ]]; then
+        local -a test_args=(-mode test -devices "$DEVICE_TYPE" -ipversion "$IPVERSION" -interface "$INTERFACE")
+        local test_arg test_escaped test_command
+        [[ -n "$CVCUE" ]] && test_args+=(-cvcue "$CVCUE")
+        printf -v test_command '%q' "$0"
+        for test_arg in "${test_args[@]}"; do
+            printf -v test_escaped '%q' "$test_arg"
+            test_command+=" ${test_escaped}"
+        done
+        printf '%s' "$test_command"
+        return
+    fi
+
     local -a args=(
         -devices "$DEVICE_TYPE"
         -platform "$PLATFORM"
@@ -264,6 +290,11 @@ build_command() {
     printf '%s' "$command"
 }
 
+print_equivalent_command() {
+    printf "  ${BOLD}Equivalent command:${RESET}\n"
+    printf "  %s\n" "$(build_command)"
+}
+
 interactive_setup() {
     banner
 
@@ -286,6 +317,8 @@ interactive_setup() {
         print_header "Step 4: Test Interface"
         echo ""
         prompt_value "Network interface (e.g. ens18, eth0)" "" "INTERFACE"
+        echo ""
+        print_equivalent_command
         echo -en "\n  ${BOLD}Run DHCP test?${RESET} ${DIM}[Y/n]${RESET}: "
         read -r confirm
         [[ "$confirm" =~ ^[Nn] ]] && { print_warn "Aborted."; exit 0; }
