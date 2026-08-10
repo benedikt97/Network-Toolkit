@@ -447,6 +447,24 @@ interactive_setup() {
 # applying the offered lease to the selected interface.
 # =============================================================================
 
+check_ipv6_managed_flag() {
+    local router_advertisement
+
+    print_header "IPv6 Router Advertisement"
+    print_info "Waiting up to 8 seconds for a router advertisement on ${INTERFACE}"
+    if ! router_advertisement=$(timeout 8 tcpdump -c 1 -vv -nni "$INTERFACE" 'icmp6 and ip6[40] == 134' 2>&1); then
+        print_warn "No router advertisement captured; could not verify the managed address configuration flag."
+        return
+    fi
+
+    if grep -Eqi 'Flags \[[^]]*managed' <<< "$router_advertisement"; then
+        print_success "Managed address configuration flag (M) is set"
+    else
+        print_warn "Managed address configuration flag (M) is not set."
+        print_info "DHCPv6 is forced for this test, but clients that follow router advertisements may not request an address."
+    fi
+}
+
 run_test_mode() {
     [[ -n "$INTERFACE" ]] || { print_error "Test mode requires -interface."; exit 1; }
     [[ "$DEVICE_TYPE" != "both" ]] || DEVICE_TYPE="wifi"
@@ -472,6 +490,8 @@ run_test_mode() {
             print_info "Requesting TFTP server (option 66) and bootfile name (option 67)"
         else
             dhcp_vci="ARISTA-AP-430"
+            dhcpcd_request_args=(-o vendor_encapsulated_options)
+            print_info "Requesting Arista vendor options (option 43: CV-CUE server and magic string)"
         fi
         capture_filter='port 67 or port 68'
         print_info "DHCPv4 vendor class (option 60): ${dhcp_vci}"
@@ -489,7 +509,8 @@ run_test_mode() {
         capture_filter='ip6 and udp portrange 546-547'
         printf 'ia_na\nvendclass 16901 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
         print_info "DHCPv6 vendor class (option 16): ${dhcp6_vendor_class}"
-        print_info "Forcing a DHCPv6 IA_NA request (router advertisement has no DHCPv6 flags)"
+        check_ipv6_managed_flag
+        print_info "Forcing a DHCPv6 IA_NA request for this test"
     fi
 
     print_header "DHCP Exchange on ${INTERFACE}"
