@@ -1,0 +1,12 @@
+---
+# Variables for arista.avd.eos_cli_config_gen.
+dhcp_servers:
+  - vrf: default
+    ipv6_subnets:
+      - subnet: ${NETWORK}
+        dns_servers:
+          - ${NAMESERVER}
+        ranges:
+          - start: ${NETWORK_ADDR}100
+            end: ${NETWORK_ADDR}200
+${AVD_WIFI_BLOCK}

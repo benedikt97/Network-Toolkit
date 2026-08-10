@@ -1,0 +1,15 @@
+---
+# Variables for arista.avd.eos_cli_config_gen.
+# The Arista WiFi vendor option is applied by EOS based on vendor ID "Arista".
+dhcp_servers:
+  - vrf: default
+    ipv4_subnets:
+      - subnet: ${NETWORK}
+        default_gateway: ${GATEWAY}
+        dns_servers:
+          - ${NAMESERVER}
+        ranges:
+          - start: ${RANGESTART}
+            end: ${RANGEEND}
+${AVD_WIFI_BLOCK}
+${AVD_TFTP_BLOCK}

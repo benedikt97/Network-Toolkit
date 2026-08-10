@@ -26,7 +26,7 @@ banner() {
 BANNER
     echo -e "${RESET}"
     echo -e "  ${DIM}Zero-Touch Provisioning for Arista Access Points${RESET}"
-    echo -e "  ${DIM}Generates ISC DHCP server configurations for AP onboarding${RESET}"
+    echo -e "  ${DIM}Generates ISC DHCP, Arista EOS, or AVD DHCP configurations for onboarding${RESET}"
     echo ""
 }
 
@@ -84,15 +84,69 @@ generate_option17() {
     echo -n "\\x00\\x00\\x42\\x05\\x00\\x01\\x00\\x${sub1_len}${server}\\x00\\x04\\x00\\x${sub4_len}${magic}"
 }
 
+# EOS expects option payloads as one continuous hexadecimal string.
+ascii_to_hex() {
+    printf '%s' "$1" | od -An -tx1 | tr -d ' \n'
+}
+
+generate_eos_option43() {
+    local server="$1" magic="SPECTRATALK" server_len magic_len
+    printf -v server_len '%02x' "${#server}"
+    printf -v magic_len '%02x' "${#magic}"
+    printf '01%s%s04%s%s' "$server_len" "$(ascii_to_hex "$server")" "$magic_len" "$(ascii_to_hex "$magic")"
+}
+
+generate_eos_option17() {
+    local server="$1" magic="SPECTRATALK" server_len magic_len
+    printf -v server_len '%04x' "${#server}"
+    printf -v magic_len '%04x' "${#magic}"
+    printf '000042050001%s%s0004%s%s' "$server_len" "$(ascii_to_hex "$server")" "$magic_len" "$(ascii_to_hex "$magic")"
+}
+
 # Config generator (envsubst on template files)
 generate_config() {
     export NETWORK_ADDR="${NETWORK%%/*}"
-    export TFTP_BLOCK=""
-    if [[ -n "$TFTP" ]]; then
-        TFTP_BLOCK=$(printf 'class "Arista-CCS" {\n    match if substring(option vendor-class-identifier, 0, 6) = "Arista";\n    option bootfile-name "http://%s/ztp.conf";\n}\n' "$TFTP")
-        export TFTP_BLOCK
+    export WIFI_BLOCK="" TFTP_BLOCK="" EOS_WIFI_BLOCK="" EOS_TFTP_BLOCK="" AVD_WIFI_BLOCK="" AVD_TFTP_BLOCK=""
+    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
+        if [[ "$PLATFORM" == "isc" && "$IPVERSION" == "4" ]]; then
+            WIFI_BLOCK=$(printf 'option space arista;\noption arista.cv-cue-server code 1 = text;\noption arista.magic-string code 4 = text;\n\nclass "Arista-AP" {\n    match if option vendor-class-identifier ~= "%s";\n    vendor-option-space arista;\n    option arista.cv-cue-server "%s";\n    option arista.magic-string "SPECTRATALK";\n}\n' "$MATCHSTRING" "$CVCUE")
+        elif [[ "$PLATFORM" == "isc" ]]; then
+            WIFI_BLOCK=$(printf '  if substring(option dhcp6.vendor-class, 6, 15) ~= "%s" {\n    option dhcp6.vendor-opts "%s";\n    option dhcp6.bootfile-url "my-startup-config";\n  }' "$MATCHSTRING" "$MAGICSTRING")
+        elif [[ "$PLATFORM" == "eos" && "$IPVERSION" == "4" ]]; then
+            EOS_WIFI_BLOCK=$(printf '   !\n   vendor-option ipv4 Arista\n      sub-option 1 type string data "%s"\n      sub-option 4 type string data "SPECTRATALK"' "$CVCUE")
+        elif [[ "$PLATFORM" == "eos" ]]; then
+            EOS_WIFI_BLOCK=$(printf '      option 17 hex %s' "$(generate_eos_option17 "$CVCUE")")
+        fi
     fi
-    local template="${SCRIPT_DIR}/templates/dhcpd_v${IPVERSION}.conf"
+    if [[ "$PLATFORM" == "avd" && ( "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ) ]]; then
+        if [[ "$IPVERSION" == "4" ]]; then
+            AVD_WIFI_BLOCK=$(printf '    # WiFi vendor discovery options for Arista access points.\n    ipv4_vendor_options:\n      - vendor_id: Arista\n        sub_options:\n          - code: 1\n            string: "%s"\n          - code: 4\n            string: "SPECTRATALK"' "$CVCUE")
+        else
+            AVD_WIFI_BLOCK=$(printf '    # DHCPv6 option 17 is emitted through the eos_cli escape hatch.\n    eos_cli: |-\n      option 17 hex %s' "$(generate_eos_option17 "$CVCUE")")
+        fi
+    fi
+    if [[ ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]]; then
+        local tftp_path="${TFTP_PATH:-ztp.conf}"
+        tftp_path="${tftp_path#/}"
+        if [[ "$PLATFORM" == "isc" ]]; then
+            TFTP_BLOCK=$(printf 'class "Arista-CCS" {\n    match if substring(option vendor-class-identifier, 0, 6) = "Arista";\n    option bootfile-name "http://%s/%s";\n}\n' "$TFTP" "$tftp_path")
+            export TFTP_BLOCK
+        elif [[ "$PLATFORM" == "eos" && "$IPVERSION" == "4" ]]; then
+            EOS_TFTP_BLOCK=$(printf '   tftp server option 66 ipv4 %s\n   tftp server file ipv4 http://%s/%s' "$TFTP" "$TFTP" "$tftp_path")
+            export EOS_TFTP_BLOCK
+        fi
+    fi
+    if [[ "$PLATFORM" == "avd" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" && "$IPVERSION" == "4" ]]; then
+        AVD_TFTP_BLOCK=$(printf '    tftp_server:\n      option_66_ipv4: %s\n      file_ipv4: "http://%s/%s"' "$TFTP" "$TFTP" "$tftp_path")
+    fi
+    local template
+    if [[ "$PLATFORM" == "isc" ]]; then
+        template="${SCRIPT_DIR}/templates/dhcpd_v${IPVERSION}.conf"
+    elif [[ "$PLATFORM" == "eos" ]]; then
+        template="${SCRIPT_DIR}/templates/eos_dhcp_v${IPVERSION}.conf"
+    else
+        template="${SCRIPT_DIR}/templates/avd_dhcp_v${IPVERSION}.yml"
+    fi
     envsubst < "$template"
 }
 
@@ -106,21 +160,20 @@ show_help() {
     echo -e "${BOLD}GENERAL OPTIONS${RESET}"
     echo -e "  ${CYAN}-h${RESET}              Show this help message"
     echo -e "  ${CYAN}-i${RESET}              Launch guided interactive setup"
+    echo -e "  ${CYAN}-mode${RESET}           ${DIM}<generate|test>${RESET}      Generate configuration or test DHCP"
+    echo -e "  ${CYAN}-interface${RESET}      ${DIM}<NAME>${RESET}               Interface for test mode"
+    echo -e "  ${CYAN}-devices${RESET}        ${DIM}<wifi|dcs-ccs|both>${RESET}  Device type / test client identity (default: both)"
+    echo -e "  ${CYAN}-platform${RESET}       ${DIM}<isc|eos|avd>${RESET}        DHCP configuration target (default: isc)"
     echo -e "  ${CYAN}-ipversion${RESET}      ${DIM}<4|6>${RESET}                IP version"
     echo -e "  ${CYAN}-network${RESET}        ${DIM}<CIDR>${RESET}               Subnet (e.g. 192.168.10.0/24)"
     echo -e "  ${CYAN}-nameserver${RESET}     ${DIM}<IP>${RESET}                 DNS server address"
     echo -e "  ${CYAN}-cvcue${RESET}          ${DIM}<IP|cloud>${RESET}           CV-CUE server or ${YELLOW}cloud${RESET} for Arista cloud"
-    echo -e "  ${CYAN}-mode${RESET}           ${DIM}<generate|install|test>${RESET}"
     echo ""
     echo -e "${BOLD}IPv4 OPTIONS${RESET} ${DIM}(auto-derived from CIDR if omitted)${RESET}"
     echo -e "  ${CYAN}-netmask${RESET}        ${DIM}<MASK>${RESET}     ${CYAN}-gateway${RESET}      ${DIM}<IP>${RESET}"
     echo -e "  ${CYAN}-range-begin${RESET}    ${DIM}<IP>${RESET}       ${CYAN}-range-end${RESET}    ${DIM}<IP>${RESET}"
     echo -e "  ${CYAN}-matchstring${RESET}    ${DIM}<PATTERN>${RESET}  ${CYAN}-tftp${RESET}         ${DIM}<IP>${RESET} (optional)"
-    echo ""
-    echo -e "${BOLD}MODES${RESET}"
-    echo -e "  ${GREEN}generate${RESET}  Print config to stdout ${DIM}(default)${RESET}"
-    echo -e "  ${YELLOW}install${RESET}   Write config and restart isc-dhcp-server ${DIM}(Ubuntu only)${RESET}"
-    echo -e "  ${CYAN}test${RESET}      Test DHCP/DNS connectivity ${DIM}(requires -interface)${RESET}"
+    echo -e "  ${CYAN}-tftp-path${RESET}      ${DIM}<PATH>${RESET}     ZTP file path (default: ztp.conf)"
     echo ""
     echo -e "${BOLD}EXAMPLES${RESET}"
     echo -e "  ${DIM}# IPv4 — minimal (netmask, gateway, range auto-derived from CIDR)${RESET}"
@@ -164,40 +217,88 @@ prompt_choice() {
 
 print_summary() {
     print_header "Configuration Summary"
-    printf "  ${BOLD}%-18s${RESET} %s\n" "Mode:" "$MODE" "IP Version:" "IPv${IPVERSION}" "Network:" "$NETWORK"
+    printf "  ${BOLD}%-18s${RESET} %s\n" "Device Type:" "$DEVICE_TYPE" "DHCP Platform:" "$PLATFORM" "IP Version:" "IPv${IPVERSION}" "Network:" "$NETWORK"
     if [[ "$IPVERSION" == "4" ]]; then
         printf "  ${BOLD}%-18s${RESET} %s\n" "Netmask:" "$NETMASK" "Gateway:" "$GATEWAY" "DHCP Range:" "${RANGESTART} - ${RANGEEND}"
     fi
     printf "  ${BOLD}%-18s${RESET} %s\n" "Nameserver:" "$NAMESERVER" "CV-CUE Server:" "$CVCUE"
     [[ -n "$MATCHSTRING" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "VCI Match:" "$MATCHSTRING"
     [[ -n "$TFTP" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "TFTP Server:" "$TFTP"
+    [[ -n "$TFTP" ]] && printf "  ${BOLD}%-18s${RESET} %s\n" "TFTP File:" "${TFTP_PATH:-ztp.conf}"
     echo ""
+    printf "  ${BOLD}Equivalent command:${RESET}\n"
+    printf "  %s\n" "$(build_command)"
+    echo ""
+}
+
+build_command() {
+    local -a args=(
+        -devices "$DEVICE_TYPE"
+        -platform "$PLATFORM"
+        -ipversion "$IPVERSION"
+        -network "$NETWORK"
+        -nameserver "$NAMESERVER"
+    )
+    local arg escaped command
+
+    if [[ "$IPVERSION" == "4" ]]; then
+        args+=(-netmask "$NETMASK" -gateway "$GATEWAY" -range-begin "$RANGESTART" -range-end "$RANGEEND")
+    fi
+    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
+        args+=(-cvcue "$CVCUE" -matchstring "$MATCHSTRING")
+    fi
+    if [[ -n "$TFTP" ]]; then
+        args+=(-tftp "$TFTP" -tftp-path "${TFTP_PATH:-ztp.conf}")
+    fi
+
+    printf -v command '%q' "$0"
+    for arg in "${args[@]}"; do
+        printf -v escaped '%q' "$arg"
+        command+=" ${escaped}"
+    done
+    printf '%s' "$command"
 }
 
 interactive_setup() {
     banner
 
-    print_header "Step 1: What would you like to do?"
-    echo -e "\n  ${GREEN}generate${RESET}  Generate DHCP config and print to stdout"
-    echo -e "  ${YELLOW}install${RESET}   Generate, write to disk, and restart isc-dhcp-server ${DIM}(Ubuntu only)${RESET}"
-    echo -e "  ${CYAN}test${RESET}      Test DHCP and DNS connectivity on an existing setup\n"
-    prompt_choice "Mode" "generate/install/test" "generate" "MODE"
+    print_header "Step 1: Operation"
+    echo -e "\n  ${GREEN}generate${RESET}  Generate a DHCP configuration"
+    echo -e "  ${CYAN}test${RESET}      Request a DHCP lease and capture the exchange\n"
+    prompt_choice "Mode" "generate/test" "generate" "MODE"
 
     print_header "Step 2: IP Version"
     echo ""
     prompt_choice "Which IP version?" "4/6" "4" "IPVERSION"
 
     if [[ "$MODE" == "test" ]]; then
-        print_header "Step 3: Test Interface"
+        print_header "Step 3: Test Device"
+        echo -e "\n  ${GREEN}wifi${RESET}     Act as an Arista WiFi access point"
+        echo -e "  ${CYAN}dcs-ccs${RESET}  Act as an Arista DCS/CCS switch\n"
+        prompt_choice "Test device" "wifi/dcs-ccs" "wifi" "DEVICE_TYPE"
+
+        print_header "Step 4: Test Interface"
         echo ""
         prompt_value "Network interface (e.g. ens18, eth0)" "" "INTERFACE"
-        echo -en "\n  ${BOLD}Run test?${RESET} ${DIM}[Y/n]${RESET}: "
+        echo -en "\n  ${BOLD}Run DHCP test?${RESET} ${DIM}[Y/n]${RESET}: "
         read -r confirm
         [[ "$confirm" =~ ^[Nn] ]] && { print_warn "Aborted."; exit 0; }
         return
     fi
 
-    print_header "Step 3: Network Configuration"
+    print_header "Step 3: Device Type"
+    echo -e "\n  ${GREEN}wifi${RESET}     Arista WiFi access points"
+    echo -e "  ${CYAN}dcs-ccs${RESET}  Arista DCS/CCS wired devices"
+    echo -e "  ${YELLOW}both${RESET}     WiFi access points and DCS/CCS devices\n"
+    prompt_choice "Device type" "wifi/dcs-ccs/both" "both" "DEVICE_TYPE"
+
+    print_header "Step 4: DHCP Platform"
+    echo -e "\n  ${GREEN}isc${RESET}  ISC DHCP server configuration"
+    echo -e "  ${CYAN}eos${RESET}  Arista EOS DHCP server configuration"
+    echo -e "  ${YELLOW}avd${RESET}  YAML variables for arista.avd.eos_cli_config_gen\n"
+    prompt_choice "DHCP platform" "isc/eos/avd" "isc" "PLATFORM"
+
+    print_header "Step 5: Network Configuration"
     echo ""
     if [[ "$IPVERSION" == "4" ]]; then
         prompt_value "Subnet (CIDR, e.g. 192.168.10.0/24)" "" "NETWORK" "validate_cidr"
@@ -215,17 +316,21 @@ interactive_setup() {
         prompt_value "Subnet (CIDR, e.g. fd12:100:100:40::/64)" "" "NETWORK" "validate_cidr"
     fi
 
-    print_header "Step 4: Services"
+    print_header "Step 6: Services"
     echo ""
     local ip_validator="validate_ipv4"; [[ "$IPVERSION" == "6" ]] && ip_validator="validate_ipv6"
     prompt_value "DNS nameserver" "" "NAMESERVER" "$ip_validator"
-    echo -e "\n  ${DIM}Tip: Enter ${YELLOW}cloud${DIM} to use Arista's cloud redirector${RESET}"
-    prompt_value "CV-CUE server address" "" "CVCUE"
-    local default_match="ARISTA-AP*"; [[ "$IPVERSION" == "6" ]] && default_match="ARISTA-AP-C-*"
-    prompt_value "VCI match pattern" "$default_match" "MATCHSTRING"
-    if [[ "$IPVERSION" == "4" ]]; then
+    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
+        echo -e "\n  ${DIM}Tip: Enter ${YELLOW}cloud${DIM} to use Arista's cloud redirector${RESET}"
+        prompt_value "CV-CUE server address" "" "CVCUE"
+        local default_match="ARISTA-AP*"; [[ "$IPVERSION" == "6" ]] && default_match="ARISTA-AP-C-*"
+        prompt_value "VCI match pattern" "$default_match" "MATCHSTRING"
+    fi
+    [[ "$PLATFORM" == "eos" ]] && print_info "EOS applies the vendor option to the complete subnet; the VCI pattern is included as a configuration comment."
+    if [[ "$IPVERSION" == "4" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) ]]; then
         print_info "Optional: TFTP server for CCS/DCS device boot (leave empty to skip)"
         prompt_value "TFTP server" "" "TFTP" "" "false"
+        [[ -n "$TFTP" ]] && prompt_value "TFTP ZTP file path" "ztp.conf" "TFTP_PATH" "" "false"
     fi
 
     [[ "$CVCUE" == "cloud" ]] && export CVCUE="redirector.online.spectraguard.net"
@@ -237,13 +342,73 @@ interactive_setup() {
     echo ""
 }
 
+run_test_mode() {
+    [[ -n "$INTERFACE" ]] || { print_error "Test mode requires -interface."; exit 1; }
+    [[ "$DEVICE_TYPE" != "both" ]] || DEVICE_TYPE="wifi"
+    [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "dcs-ccs" ]] || { print_error "Test device must be wifi or dcs-ccs."; exit 1; }
+
+    print_header "DHCP Connectivity Test"
+    print_info "Interface: ${INTERFACE}  |  IPv${IPVERSION}  |  Client: ${DEVICE_TYPE}"
+    command -v dhclient &>/dev/null || { print_error "dhclient required: apt install isc-dhcp-client"; exit 1; }
+    command -v tcpdump &>/dev/null || { print_error "tcpdump required: apt install tcpdump"; exit 1; }
+    command -v timeout &>/dev/null || { print_error "timeout command required"; exit 1; }
+    print_success "Required DHCP tools found"
+
+    local client_config capture_filter lease_file capture_pid
+    lease_file=$(mktemp /tmp/arista-ztp-test.XXXXXX) || { print_error "Could not create temporary lease file."; exit 1; }
+    trap 'rm -f "$lease_file"' EXIT
+
+    if [[ "$IPVERSION" == "4" ]]; then
+        if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
+            client_config="${SCRIPT_DIR}/configs/isc_dhcp_dcs_client.conf"
+        else
+            client_config="${SCRIPT_DIR}/configs/isc_dhcp_ap_client.conf"
+        fi
+        capture_filter='port 67 or port 68'
+        if [[ "$DEVICE_TYPE" == "wifi" ]]; then
+            command -v nslookup &>/dev/null || { print_error "nslookup required: apt install dnsutils"; exit 1; }
+            print_header "DNS Lookup"
+            nslookup "wifi-security-server" || print_warn "DNS lookup failed. Continuing with DHCP test."
+        fi
+    else
+        if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
+            client_config="${SCRIPT_DIR}/configs/isc_dhcp6_dcs_client.conf"
+        else
+            client_config="${SCRIPT_DIR}/configs/isc_dhcp6_ap_client.conf"
+        fi
+        capture_filter='ip6 and udp portrange 546-547'
+    fi
+    [[ -r "$client_config" ]] || { print_error "DHCP client config not found: $client_config"; exit 1; }
+
+    print_header "DHCP Exchange on ${INTERFACE}"
+    timeout 8 tcpdump -c 6 -v -nni "$INTERFACE" $capture_filter &
+    capture_pid=$!
+    if [[ "$IPVERSION" == "4" ]]; then
+        timeout 8 dhclient -cf "$client_config" -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" 2>/dev/null || print_warn "DHCP client exited without a lease."
+    else
+        timeout 8 dhclient -cf "$client_config" -6 -d -v -sf /bin/true -lf "$lease_file" "$INTERFACE" 2>/dev/null || print_warn "DHCPv6 client exited without a lease."
+    fi
+    wait "$capture_pid" 2>/dev/null || true
+
+    if [[ "$DEVICE_TYPE" == "wifi" && -n "$CVCUE" ]]; then
+        command -v nc &>/dev/null || { print_warn "nc not found; skipping CV-CUE connectivity test."; return; }
+        print_header "CV-CUE Connectivity"
+        nc -zv "$CVCUE" 3851 || print_warn "Could not reach ${CVCUE}:3851"
+    fi
+}
+
 # Flag parsing
 MODE="generate"
+PLATFORM="isc"
+DEVICE_TYPE="both"
 INTERACTIVE=false
 [[ $# -eq 0 ]] && INTERACTIVE=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -mode)          MODE="$2";                shift 2 ;;
+        -devices)       DEVICE_TYPE="$2";          shift 2 ;;
+        -platform)      PLATFORM="$2";            shift 2 ;;
         -ipversion)     export IPVERSION="$2";     shift 2 ;;
         -network)       export NETWORK="$2";       shift 2 ;;
         -range-begin)   export RANGESTART="$2";    shift 2 ;;
@@ -252,10 +417,10 @@ while [[ $# -gt 0 ]]; do
         -gateway)       export GATEWAY="$2";       shift 2 ;;
         -nameserver)    export NAMESERVER="$2";     shift 2 ;;
         -cvcue)         export CVCUE="$2";         shift 2 ;;
-        -mode)          MODE="$2";                 shift 2 ;;
-        -interface)     INTERFACE="$2";            shift 2 ;;
         -matchstring)   export MATCHSTRING="$2";   shift 2 ;;
         -tftp)          export TFTP="$2";          shift 2 ;;
+        -tftp-path)     export TFTP_PATH="$2";     shift 2 ;;
+        -interface)     INTERFACE="$2";            shift 2 ;;
         -i|--interactive) INTERACTIVE=true;        shift ;;
         -h|--help)      show_help ;;
         *) print_error "Unknown option: $1"; exit 1 ;;
@@ -265,39 +430,33 @@ done
 [[ "$INTERACTIVE" == true ]] && interactive_setup
 [[ "$CVCUE" == "cloud" ]] && export CVCUE="redirector.online.spectraguard.net"
 
+if [[ "$MODE" != "generate" && "$MODE" != "test" ]]; then
+    print_error "Mode must be generate or test (-mode generate|test)"
+    exit 1
+fi
+
+if [[ "$PLATFORM" != "isc" && "$PLATFORM" != "eos" && "$PLATFORM" != "avd" ]]; then
+    print_error "DHCP platform must be isc, eos, or avd (-platform isc|eos|avd)"
+    exit 1
+fi
+if [[ "$DEVICE_TYPE" != "wifi" && "$DEVICE_TYPE" != "dcs-ccs" && "$DEVICE_TYPE" != "both" ]]; then
+    print_error "Device type must be wifi, dcs-ccs, or both (-devices wifi|dcs-ccs|both)"
+    exit 1
+fi
+
 if [[ -z "$IPVERSION" ]]; then
     print_error "IP version is required (-ipversion 4|6)"
     echo -e "  Run ${CYAN}$0 --help${RESET} or ${CYAN}$0 -i${RESET}"
     exit 1
 fi
 
-# Test mode
 if [[ "$MODE" == "test" ]]; then
-    [[ -z "$INTERFACE" ]] && { print_error "Test mode requires -interface"; exit 1; }
-    print_header "Testing DHCP and DNS"
-    command -v dhclient &>/dev/null || { print_error "dhclient required: apt install isc-dhcp-client"; exit 1; }
-    print_success "dhclient found"
-    command -v tcpdump &>/dev/null || { print_error "tcpdump required: apt install tcpdump"; exit 1; }
-    print_success "tcpdump found"
-    if [[ "$IPVERSION" == "4" ]]; then
-        print_header "DNS Lookup"
-        nslookup "wifi-security-server"
-        print_header "DHCP Test on ${INTERFACE}"
-        timeout 5 tcpdump -c 4 -v -nni "$INTERFACE" port 68 and port 67 &
-        timeout 5 dhclient -cf "${SCRIPT_DIR}/isc_dhcp_ap_client.conf" -d -v -sf /bin/true -lf /tmp/test.leases "$INTERFACE" 2>/dev/null
-        [[ -n "$CVCUE" ]] && { print_header "CV-CUE Connectivity"; nc -zv "$CVCUE" 3851; }
-    else
-        print_header "DHCP Test on ${INTERFACE}"
-        timeout 5 tcpdump -c 4 -v -nni "$INTERFACE" ip6 and udp portrange 546-547 &
-        timeout 5 dhclient -cf "${SCRIPT_DIR}/isc_dhcp6_ap_client.conf" -6 -d -v -sf /bin/true -lf /tmp/test.leases "$INTERFACE" 2>/dev/null
-        [[ -n "$CVCUE" ]] && { print_header "CV-CUE Connectivity"; nc -zv "$CVCUE" 3851; }
-    fi
+    run_test_mode
     exit 0
 fi
 
 # Auto-derive defaults & validate
 if [[ "$IPVERSION" == "4" ]]; then
-    DHCPCONFIG="/etc/dhcp/dhcpd.conf"
     if [[ -n "$NETWORK" ]]; then
         local_prefix="${NETWORK##*/}"
         base=$(network_base "$NETWORK")
@@ -306,7 +465,9 @@ if [[ "$IPVERSION" == "4" ]]; then
         [[ -z "$RANGESTART" ]] && export RANGESTART="${base}.100"
         [[ -z "$RANGEEND" ]]   && export RANGEEND="${base}.200"
     fi
-    [[ -z "$MATCHSTRING" ]] && export MATCHSTRING="ARISTA-AP*"
+    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
+        [[ -z "$MATCHSTRING" ]] && export MATCHSTRING="ARISTA-AP*"
+    fi
 
     missing=()
     [[ -z "$NETWORK" ]]    && missing+=("-network")
@@ -315,7 +476,7 @@ if [[ "$IPVERSION" == "4" ]]; then
     [[ -z "$RANGESTART" ]] && missing+=("-range-begin")
     [[ -z "$RANGEEND" ]]   && missing+=("-range-end")
     [[ -z "$NAMESERVER" ]] && missing+=("-nameserver")
-    [[ -z "$CVCUE" ]]      && missing+=("-cvcue")
+    [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && [[ -z "$CVCUE" ]] && missing+=("-cvcue")
     [[ ${#missing[@]} -gt 0 ]] && { print_error "Missing required options: ${missing[*]}"; exit 1; }
 
     validate_cidr "$NETWORK"     || { print_error "Invalid IPv4 CIDR: $NETWORK"; exit 1; }
@@ -324,18 +485,22 @@ if [[ "$IPVERSION" == "4" ]]; then
     validate_ipv4 "$RANGESTART"  || { print_error "Invalid range-begin: $RANGESTART"; exit 1; }
     validate_ipv4 "$RANGEEND"    || { print_error "Invalid range-end: $RANGEEND"; exit 1; }
     validate_netmask "$NETMASK"  || { print_error "Invalid netmask: $NETMASK"; exit 1; }
+    [[ "$PLATFORM" == "isc" ]] || print_warn "EOS applies the vendor option to the complete subnet; the VCI pattern is retained as a comment."
 else
-    DHCPCONFIG="/etc/dhcp/dhcpd6.conf"
-    [[ -z "$MATCHSTRING" ]] && export MATCHSTRING="ARISTA-AP-C-*"
+    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
+        [[ -z "$MATCHSTRING" ]] && export MATCHSTRING="ARISTA-AP-C-*"
+    fi
 
     missing=()
     [[ -z "$NETWORK" ]]    && missing+=("-network")
     [[ -z "$NAMESERVER" ]] && missing+=("-nameserver")
-    [[ -z "$CVCUE" ]]      && missing+=("-cvcue")
+    [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && [[ -z "$CVCUE" ]] && missing+=("-cvcue")
     [[ ${#missing[@]} -gt 0 ]] && { print_error "Missing required options: ${missing[*]}"; exit 1; }
 
-    export MAGICSTRING
-    MAGICSTRING=$(generate_option17 "$CVCUE")
+    if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
+        export MAGICSTRING
+        MAGICSTRING=$(generate_option17 "$CVCUE")
+    fi
 fi
 
 # Output config
@@ -345,31 +510,18 @@ show_config() {
     echo -e "${DIM}─────────────────────────────────────────────${RESET}"
 }
 
-ISCCONFIG=$(generate_config)
+DHCP_CONFIG=$(generate_config)
 
-if [[ "$MODE" == "generate" ]]; then
+if [[ "$PLATFORM" == "isc" ]]; then
     print_header "Generated ISC DHCP Configuration"
-    show_config "$ISCCONFIG"
-    print_success "Copy the content above into ${CYAN}${DHCPCONFIG}${RESET}"
+elif [[ "$PLATFORM" == "eos" ]]; then
+    print_header "Generated Arista EOS DHCP Configuration"
+else
+    print_header "Generated AVD DHCP Variables"
 fi
-
-if [[ "$MODE" == "install" ]]; then
-    print_header "Install Mode"
-    grep -q Ubuntu /etc/os-release 2>/dev/null || { print_error "Install mode is only supported on Ubuntu."; exit 1; }
-    print_success "Ubuntu detected"
-    command -v dhcpd &>/dev/null || { print_error "isc-dhcp-server not installed: apt install isc-dhcp-server"; exit 1; }
-    print_success "isc-dhcp-server found"
-    ip route get "$GATEWAY" &>/dev/null || { print_error "No interface in target subnet (${NETWORK})."; exit 1; }
-    print_success "Interface reachable in target subnet"
-    echo ""
-    show_config "$ISCCONFIG"
-    echo ""
-    print_warn "This will overwrite ${CYAN}${DHCPCONFIG}${RESET} and restart isc-dhcp-server."
-    echo -en "  ${BOLD}Proceed?${RESET} ${DIM}[y/N]${RESET}: "
-    read -r confirm
-    [[ ! "$confirm" =~ ^[Yy] ]] && { print_warn "Aborted."; exit 0; }
-    echo "$ISCCONFIG" | tee "$DHCPCONFIG" > /dev/null
-    systemctl restart isc-dhcp-server.service
-    print_success "Configuration written and isc-dhcp-server restarted."
-    systemctl status isc-dhcp-server.service --no-pager -l
+show_config "$DHCP_CONFIG"
+if [[ "$PLATFORM" == "avd" ]]; then
+    print_success "Save the YAML above as variables consumed by ${CYAN}arista.avd.eos_cli_config_gen${RESET}."
+else
+    print_success "Copy the content above into the ${CYAN}${PLATFORM}${RESET} DHCP server configuration."
 fi

@@ -1,0 +1,23 @@
+# Test mode
+if [[ "$MODE" == "test" ]]; then
+    [[ -z "$INTERFACE" ]] && { print_error "Test mode requires -interface"; exit 1; }
+    print_header "Testing DHCP and DNS"
+    command -v dhclient &>/dev/null || { print_error "dhclient required: apt install isc-dhcp-client"; exit 1; }
+    print_success "dhclient found"
+    command -v tcpdump &>/dev/null || { print_error "tcpdump required: apt install tcpdump"; exit 1; }
+    print_success "tcpdump found"
+    if [[ "$IPVERSION" == "4" ]]; then
+        print_header "DNS Lookup"
+        nslookup "wifi-security-server"
+        print_header "DHCP Test on ${INTERFACE}"
+        timeout 5 tcpdump -c 4 -v -nni "$INTERFACE" port 68 and port 67 &
+        timeout 5 dhclient -cf "${SCRIPT_DIR}/isc_dhcp_ap_client.conf" -d -v -sf /bin/true -lf /tmp/test.leases "$INTERFACE" 2>/dev/null
+        [[ -n "$CVCUE" ]] && { print_header "CV-CUE Connectivity"; nc -zv "$CVCUE" 3851; }
+    else
+        print_header "DHCP Test on ${INTERFACE}"
+        timeout 5 tcpdump -c 4 -v -nni "$INTERFACE" ip6 and udp portrange 546-547 &
+        timeout 5 dhclient -cf "${SCRIPT_DIR}/isc_dhcp6_ap_client.conf" -6 -d -v -sf /bin/true -lf /tmp/test.leases "$INTERFACE" 2>/dev/null
+        [[ -n "$CVCUE" ]] && { print_header "CV-CUE Connectivity"; nc -zv "$CVCUE" 3851; }
+    fi
+    exit 0
+fi
