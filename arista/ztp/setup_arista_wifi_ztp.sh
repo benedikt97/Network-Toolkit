@@ -161,7 +161,7 @@ merge_template() {
 
 generate_config() {
     local blocks_dir="${SCRIPT_DIR}/templates/blocks"
-    local tftp_path
+    local tftp_path tftp_url_host
 
     export NETWORK_ADDR="${NETWORK%%/*}"
     export CONFIG_BLOCKS=""
@@ -175,6 +175,9 @@ generate_config() {
         tftp_path="${TFTP_PATH:-ztp.conf}"
         tftp_path="${tftp_path#/}"
         export TFTP_PATH="$tftp_path"
+        tftp_url_host="$TFTP"
+        [[ "$IPVERSION" == "6" && "$tftp_url_host" == *:* && "$tftp_url_host" != \[*\] ]] && tftp_url_host="[${tftp_url_host}]"
+        export TFTP_URL_HOST="$tftp_url_host"
     fi
 
     if [[ "$PLATFORM" == "isc" ]]; then
@@ -189,6 +192,7 @@ generate_config() {
             merge_template "${blocks_dir}/isc/dns_v6.conf"
             merge_template "${blocks_dir}/isc/subnet_v6_open.conf"
             [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/isc/wifi_v6.conf"
+            [[ ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/isc/tftp_v6.conf"
             merge_template "${blocks_dir}/isc/subnet_v6_close.conf"
         fi
     elif [[ "$PLATFORM" == "eos" ]]; then
@@ -199,6 +203,7 @@ generate_config() {
             merge_template "${blocks_dir}/eos/subnet_v4.conf"
             [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/eos/wifi_v4.conf"
         else
+            [[ ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/eos/tftp_v6.conf"
             merge_template "${blocks_dir}/eos/subnet_v6.conf"
             [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/eos/wifi_v6.conf"
         fi
@@ -206,6 +211,7 @@ generate_config() {
         merge_template "${blocks_dir}/avd/header_v${IPVERSION}.yml"
         [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && merge_template "${blocks_dir}/avd/wifi_v${IPVERSION}.yml"
         [[ "$IPVERSION" == "4" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/avd/tftp_v4.yml"
+        [[ "$IPVERSION" == "6" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) && -n "$TFTP" ]] && merge_template "${blocks_dir}/avd/tftp_v6.yml"
     fi
     render_template "${SCRIPT_DIR}/templates/master.template"
 }
@@ -238,7 +244,8 @@ show_help() {
     echo -e "${BOLD}IPv4 OPTIONS${RESET} ${DIM}(auto-derived from CIDR if omitted)${RESET}"
     echo -e "  ${CYAN}-netmask${RESET}        ${DIM}<MASK>${RESET}     ${CYAN}-gateway${RESET}      ${DIM}<IP>${RESET}"
     echo -e "  ${CYAN}-range-begin${RESET}    ${DIM}<IP>${RESET}       ${CYAN}-range-end${RESET}    ${DIM}<IP>${RESET}"
-    echo -e "  ${CYAN}-matchstring${RESET}    ${DIM}<PATTERN>${RESET}  ${CYAN}-tftp${RESET}         ${DIM}<IP>${RESET} (optional)"
+    echo -e "  ${CYAN}-matchstring${RESET}    ${DIM}<PATTERN>${RESET}"
+    echo -e "  ${CYAN}-tftp${RESET}           ${DIM}<IP>${RESET}       Optional CCS/DCS ZTP HTTP server (IPv4 or IPv6)"
     echo -e "  ${CYAN}-tftp-path${RESET}      ${DIM}<PATH>${RESET}     ZTP file path (default: ztp.conf)"
     echo -e "  ${CYAN}-config-path${RESET}    ${DIM}<PATH>${RESET}     ISC DHCP config path for install mode"
     echo ""
@@ -417,7 +424,7 @@ interactive_setup() {
         prompt_value "VCI match pattern" "$default_match" "MATCHSTRING"
     fi
     [[ "$PLATFORM" == "eos" ]] && print_info "EOS applies the vendor option to the complete subnet; the VCI pattern is included as a configuration comment."
-    if [[ "$IPVERSION" == "4" && ( "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ) ]]; then
+    if [[ "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ]]; then
         print_info "Optional: TFTP server for CCS/DCS device boot (leave empty to skip)"
         prompt_value "TFTP server" "" "TFTP" "" "false"
         [[ -n "$TFTP" ]] && prompt_value "TFTP ZTP file path" "ztp.conf" "TFTP_PATH" "" "false"
@@ -451,8 +458,8 @@ check_ipv6_managed_flag() {
     local router_advertisement
 
     print_header "IPv6 Router Advertisement"
-    print_info "Waiting up to 8 seconds for a router advertisement on ${INTERFACE}"
-    if ! router_advertisement=$(timeout 8 tcpdump -c 1 -vv -nni "$INTERFACE" 'icmp6 and ip6[40] == 134' 2>&1); then
+    print_info "Waiting up to 20 seconds for a router advertisement on ${INTERFACE}"
+    if ! router_advertisement=$(timeout 20 tcpdump -c 1 -vv -nni "$INTERFACE" 'icmp6 and ip6[40] == 134' 2>&1); then
         print_warn "No router advertisement captured; could not verify the managed address configuration flag."
         return
     fi
@@ -502,13 +509,20 @@ run_test_mode() {
         fi
     else
         if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
-            dhcp6_vendor_class="Arista"
+            # DCS/CCS ZTP identifies itself in DHCPv6 option 17, not option 16.
+            # The server matches only the Arista prefix, not this example model.
+            dhcp6_vendor_class="Arista;DCS-7280SR-48C6;10.05;ZTPTEST"
         else
             dhcp6_vendor_class="ARISTA-AP-C-430"
         fi
         capture_filter='ip6 and udp portrange 546-547'
-        printf 'ia_na\nvendclass 16901 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
-        print_info "DHCPv6 vendor class (option 16): ${dhcp6_vendor_class}"
+        if [[ "$DEVICE_TYPE" == "dcs-ccs" ]]; then
+            printf 'ia_na\nvendor 30065 1 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
+            print_info "DHCPv6 vendor-specific information (option 17): ${dhcp6_vendor_class}"
+        else
+            printf 'ia_na\nvendclass 16901 "%s"\noption dhcp6_bootfile_url\n' "$dhcp6_vendor_class" > "$dhcpcd_config"
+            print_info "DHCPv6 vendor class (option 16): ${dhcp6_vendor_class}"
+        fi
         check_ipv6_managed_flag
         print_info "Forcing a DHCPv6 IA_NA request for this test"
     fi
