@@ -39,7 +39,7 @@ banner() {
 /_/   \_\_|  |_|___/\__\__,_| /____| |_| |_|
 BANNER
     echo -e "${RESET}"
-    echo -e "  ${DIM}Zero-Touch Provisioning for Arista Access Points${RESET}"
+    echo -e "  ${DIM}Zero-Touch Provisioning for Arista Devices${RESET}"
     echo -e "  ${DIM}Generates ISC DHCP, Arista EOS, or AVD DHCP configurations for onboarding${RESET}"
     echo ""
 }
@@ -63,6 +63,16 @@ validate_ipv4() {
 
 validate_ipv6() {
     [[ "$1" =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]] || [[ "$1" =~ :: ]]
+}
+
+# TFTP servers are hosts, not subnets. Keep this separate from validate_ipv6,
+# which is also used by the CIDR-aware network prompts.
+validate_ipv6_tftp_server() {
+    if [[ "$1" == */* ]]; then
+        print_warn "TFTP server must be an IPv6 address without a subnet prefix (for example: 2a02:8071:280:ee1f:be24:11ff:fead:2cea)."
+        return 1
+    fi
+    validate_ipv6 "$1"
 }
 
 validate_cidr() {
@@ -159,6 +169,15 @@ merge_template() {
     [[ -z "$rendered" ]] || CONFIG_BLOCKS+="${CONFIG_BLOCKS:+$'\n'}${rendered}"
 }
 
+# EOS cannot emit DHCPv6 option 17, which Arista WiFi APs require to discover
+# their CV-CUE server. AVD renders configuration for EOS, so it has the same
+# limitation.
+eos_dhcpv6_wifi_unsupported() {
+    [[ "$IPVERSION" == "6" ]] &&
+        [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] &&
+        [[ "$PLATFORM" == "eos" || "$PLATFORM" == "avd" ]]
+}
+
 generate_config() {
     local blocks_dir="${SCRIPT_DIR}/templates/blocks"
     local tftp_path tftp_url_host
@@ -245,17 +264,23 @@ show_help() {
     echo -e "  ${CYAN}-netmask${RESET}        ${DIM}<MASK>${RESET}     ${CYAN}-gateway${RESET}      ${DIM}<IP>${RESET}"
     echo -e "  ${CYAN}-range-begin${RESET}    ${DIM}<IP>${RESET}       ${CYAN}-range-end${RESET}    ${DIM}<IP>${RESET}"
     echo -e "  ${CYAN}-matchstring${RESET}    ${DIM}<PATTERN>${RESET}"
-    echo -e "  ${CYAN}-tftp${RESET}           ${DIM}<IP>${RESET}       Optional CCS/DCS ZTP HTTP server (IPv4 or IPv6)"
+    echo -e "  ${CYAN}-tftp${RESET}           ${DIM}<IP>${RESET}       Required CCS/DCS ZTP TFTP server (IPv4 or IPv6)"
     echo -e "  ${CYAN}-tftp-path${RESET}      ${DIM}<PATH>${RESET}     ZTP file path (default: ztp.conf)"
     echo -e "  ${CYAN}-config-path${RESET}    ${DIM}<PATH>${RESET}     ISC DHCP config path for install mode"
     echo ""
     echo -e "${BOLD}EXAMPLES${RESET}"
-    echo -e "  ${DIM}# IPv4 — minimal (netmask, gateway, range auto-derived from CIDR)${RESET}"
-    echo -e "  $0 -ipversion 4 -network 192.168.51.0/24 -nameserver 192.168.51.250 -cvcue 10.113.204.10"
+    echo -e "  ${DIM}# IPv4 — WiFi AP and DCS/CCS DHCP; use isc, eos, or avd as needed${RESET}"
+    echo -e "  $0 -devices both -platform eos -ipversion 4 -network 192.168.51.0/24 \\"
+    echo -e "     -nameserver 8.8.8.8 -netmask 255.255.255.0 -gateway 192.168.51.1 \\"
+    echo -e "     -range-begin 192.168.51.100 -range-end 192.168.51.200 \\"
+    echo -e "     -cvcue redirector.online.spectraguard.net -matchstring 'ARISTA-AP*' \\"
+    echo -e "     -tftp 192.168.51.250 -tftp-path ztp.conf"
     echo ""
-    echo -e "  ${DIM}# IPv6${RESET}"
-    echo -e "  $0 -ipversion 6 -network fd12:100:100:40::/64 \\"
-    echo -e "     -nameserver fd12:100:100:40::1 -cvcue fd12:100:100:40::100 -matchstring 'ARISTA-AP-C-*'"
+    echo -e "  ${DIM}# IPv6 — WiFi AP and DCS/CCS DHCP with ISC (EOS/AVD supports DCS/CCS only)${RESET}"
+    echo -e "  $0 -devices both -platform isc -ipversion 6 -network 2a02:8071:280:ee1f::/64 \\"
+    echo -e "     -nameserver 2001:4860:4860::8888 -cvcue redirector.online.spectraguard.net \\"
+    echo -e "     -matchstring 'ARISTA-AP-C-*' -tftp 2a02:8071:280:ee1f:be24:11ff:fead:2cea \\"
+    echo -e "     -tftp-path ztp.conf"
     echo ""
     exit 0
 }
@@ -391,9 +416,17 @@ interactive_setup() {
 
     print_header "Step 4: DHCP Platform"
     echo -e "\n  ${GREEN}isc${RESET}  ISC DHCP server configuration"
-    echo -e "  ${CYAN}eos${RESET}  Arista EOS DHCP server configuration"
-    echo -e "  ${YELLOW}avd${RESET}  YAML variables for arista.avd.eos_cli_config_gen\n"
-    prompt_choice "DHCP platform" "isc/eos/avd" "isc" "PLATFORM"
+    if [[ "$IPVERSION" == "6" && ( "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ) ]]; then
+        echo -e "  ${DIM}eos${RESET}  Not supported for IPv6 WiFi APs (EOS cannot emit DHCPv6 option 17)"
+        echo -e "  ${DIM}avd${RESET}  Not supported for IPv6 WiFi APs (EOS cannot emit DHCPv6 option 17)\n"
+        print_warn "IPv6 WiFi AP bootstrapping requires ISC DHCP. Choose dcs-ccs only to use EOS or AVD."
+        print_warn "Alternatively setup DNS name 'wifi-security-server' pointing to your CV-CUE instance."
+        prompt_choice "DHCP platform" "isc" "isc" "PLATFORM"
+    else
+        echo -e "  ${CYAN}eos${RESET}  Arista EOS DHCP server configuration"
+        echo -e "  ${YELLOW}avd${RESET}  YAML variables for arista.avd.eos_cli_config_gen\n"
+        prompt_choice "DHCP platform" "isc/eos/avd" "isc" "PLATFORM"
+    fi
 
     print_header "Step 5: Network Configuration"
     echo ""
@@ -425,9 +458,10 @@ interactive_setup() {
     fi
     [[ "$PLATFORM" == "eos" ]] && print_info "EOS applies the vendor option to the complete subnet; the VCI pattern is included as a configuration comment."
     if [[ "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ]]; then
-        print_info "Optional: TFTP server for CCS/DCS device boot (leave empty to skip)"
-        prompt_value "TFTP server" "" "TFTP" "" "false"
-        [[ -n "$TFTP" ]] && prompt_value "TFTP ZTP file path" "ztp.conf" "TFTP_PATH" "" "false"
+        print_info "TFTP server is required for CCS/DCS device boot"
+        local tftp_validator="validate_ipv4"; [[ "$IPVERSION" == "6" ]] && tftp_validator="validate_ipv6_tftp_server"
+        prompt_value "TFTP server" "" "TFTP" "$tftp_validator"
+        prompt_value "TFTP ZTP file path" "ztp.conf" "TFTP_PATH" "" "false"
     fi
 
     if [[ "$MODE" == "install" ]]; then
@@ -661,6 +695,11 @@ if [[ "$MODE" == "test" ]]; then
     exit 0
 fi
 
+if eos_dhcpv6_wifi_unsupported; then
+    print_warn "No configuration generated: EOS DHCPv6 cannot emit option 17, which is required to bootstrap Arista WiFi APs. Use -platform isc or -devices dcs-ccs."
+    exit 0
+fi
+
 # =============================================================================
 # Generate / Install Input Completion and Validation
 # =============================================================================
@@ -686,6 +725,7 @@ if [[ "$IPVERSION" == "4" ]]; then
     [[ -z "$RANGEEND" ]]   && missing+=("-range-end")
     [[ -z "$NAMESERVER" ]] && missing+=("-nameserver")
     [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && [[ -z "$CVCUE" ]] && missing+=("-cvcue")
+    [[ "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ]] && [[ -z "$TFTP" ]] && missing+=("-tftp")
     [[ ${#missing[@]} -gt 0 ]] && { print_error "Missing required options: ${missing[*]}"; exit 1; }
 
     validate_cidr "$NETWORK"     || { print_error "Invalid IPv4 CIDR: $NETWORK"; exit 1; }
@@ -694,6 +734,9 @@ if [[ "$IPVERSION" == "4" ]]; then
     validate_ipv4 "$RANGESTART"  || { print_error "Invalid range-begin: $RANGESTART"; exit 1; }
     validate_ipv4 "$RANGEEND"    || { print_error "Invalid range-end: $RANGEEND"; exit 1; }
     validate_netmask "$NETMASK"  || { print_error "Invalid netmask: $NETMASK"; exit 1; }
+    if [[ "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ]]; then
+        validate_ipv4 "$TFTP" || { print_error "Invalid TFTP server: $TFTP"; exit 1; }
+    fi
     [[ "$PLATFORM" == "isc" ]] || print_warn "EOS applies the vendor option to the complete subnet; the VCI pattern is retained as a comment."
 else
     if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
@@ -704,7 +747,12 @@ else
     [[ -z "$NETWORK" ]]    && missing+=("-network")
     [[ -z "$NAMESERVER" ]] && missing+=("-nameserver")
     [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]] && [[ -z "$CVCUE" ]] && missing+=("-cvcue")
+    [[ "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ]] && [[ -z "$TFTP" ]] && missing+=("-tftp")
     [[ ${#missing[@]} -gt 0 ]] && { print_error "Missing required options: ${missing[*]}"; exit 1; }
+
+    if [[ "$DEVICE_TYPE" == "dcs-ccs" || "$DEVICE_TYPE" == "both" ]]; then
+        validate_ipv6_tftp_server "$TFTP" || { print_error "Invalid IPv6 TFTP server: $TFTP"; exit 1; }
+    fi
 
     if [[ "$DEVICE_TYPE" == "wifi" || "$DEVICE_TYPE" == "both" ]]; then
         export MAGICSTRING

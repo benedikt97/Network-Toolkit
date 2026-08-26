@@ -1,2 +1,2 @@
     tftp_server:
-      file_ipv6: "http://${TFTP_URL_HOST}/${TFTP_PATH}"
+      file_ipv6: "tftp://${TFTP_URL_HOST}/${TFTP_PATH}"
