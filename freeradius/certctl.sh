@@ -2,7 +2,7 @@
 # Manage the private CA and EAP-TLS endpoint certificates installed by install.sh.
 set -euo pipefail
 
-CERT_DIR=${CERT_DIR:-/etc/freeradius/3.0/certs/network-toolkit}
+CERT_DIR=${CERT_DIR:-/etc/freeradius/3.0/certs/$(hostname -s)}
 CA_DIR=$CERT_DIR/ca
 CA_CONF=$CERT_DIR/openssl-ca.cnf
 ENDPOINT_DIR=$CERT_DIR/endpoints

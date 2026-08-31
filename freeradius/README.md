@@ -11,7 +11,7 @@ cd freeradius
 sudo ./install.sh --nas-ip 192.0.2.10 --nas-secret 'use-a-long-random-shared-secret' --server-name radius.example.net
 ```
 
-The installer installs `freeradius`, `freeradius-utils`, `openssl`, and `gettext-base` (for `envsubst`); saves replaced configuration files in `/etc/freeradius/3.0/.network-toolkit-backup-*`; creates a private CA; and starts the service. Allow UDP/1812 from the authenticator to the server in the firewall.
+The installer installs `freeradius`, `freeradius-utils`, `openssl`, and `gettext-base` (for `envsubst`); saves replaced configuration files in `/etc/freeradius/3.0/.eap-tls-backup-*`; creates a private CA; and starts the service. Certificate material is stored under `/etc/freeradius/3.0/certs/<hostname>/`, using the server's short hostname. Allow UDP/1812 from the authenticator to the server in the firewall.
 
 For more authenticators, add one `client` block to `/etc/freeradius/3.0/clients.d/network-toolkit.conf`, then run `sudo systemctl reload freeradius`.
 
@@ -23,7 +23,7 @@ Create a bundle for an EOS endpoint:
 sudo freeradius-certctl issue arista-eos-01
 ```
 
-It produces the endpoint certificate, private key, and an encrypted PKCS#12 bundle in `/etc/freeradius/3.0/certs/network-toolkit/endpoints/`. Securely copy the `.p12` bundle and CA certificate to the endpoint/provisioning system. The export password is prompted by OpenSSL and is intentionally never stored.
+It produces the endpoint certificate, private key, and an encrypted PKCS#12 bundle in `/etc/freeradius/3.0/certs/<hostname>/endpoints/`. Securely copy the `.p12` bundle and CA certificate to the endpoint/provisioning system. The export password is prompted by OpenSSL and is intentionally never stored.
 
 Useful commands:
 

@@ -32,7 +32,8 @@ command -v apt-get >/dev/null || { echo 'This installer supports Ubuntu/Debian a
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 RADIUS_DIR=/etc/freeradius/3.0
-CERT_DIR=$RADIUS_DIR/certs/network-toolkit
+HOSTNAME_DIR=$(hostname -s)
+CERT_DIR=$RADIUS_DIR/certs/$HOSTNAME_DIR
 STAMP=$(date +%Y%m%d%H%M%S)
 export CERT_DIR NAS_IP NAS_SECRET
 
@@ -46,7 +47,7 @@ install -m 0700 "$SCRIPT_DIR/certctl.sh" /usr/local/sbin/freeradius-certctl
 envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/openssl-ca.cnf" > "$CERT_DIR/openssl-ca.cnf"
 chmod 0640 "$CERT_DIR/openssl-ca.cnf"
 
-backup="$RADIUS_DIR/.network-toolkit-backup-$STAMP"
+backup="$RADIUS_DIR/.eap-tls-backup-$STAMP"
 install -d -m 0700 "$backup"
 for file in "$RADIUS_DIR/mods-enabled/eap" "$RADIUS_DIR/clients.conf"; do
   [[ -e $file || -L $file ]] && cp -a "$file" "$backup/"
