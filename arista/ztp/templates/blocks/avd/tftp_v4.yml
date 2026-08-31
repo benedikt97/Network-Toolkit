@@ -1,0 +1,2 @@
+    tftp_server:
+      file_ipv4: "tftp://${TFTP}/${TFTP_PATH}"

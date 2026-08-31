@@ -1,0 +1,3 @@
+    # DHCPv6 option 17 is emitted through the eos_cli escape hatch.
+#    eos_cli: |-
+#      option 17 hex ${EOS_OPTION17}
