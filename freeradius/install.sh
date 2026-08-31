@@ -55,8 +55,10 @@ for file in "$RADIUS_DIR/mods-enabled/eap" "$RADIUS_DIR/clients.conf"; do
 done
 
 envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/mods-enabled/eap" > "$RADIUS_DIR/mods-enabled/eap"
+chown root:freerad "$RADIUS_DIR/mods-enabled/eap"
 chmod 0640 "$RADIUS_DIR/mods-enabled/eap"
 envsubst '${NAS_IP} ${NAS_SECRET}' < "$SCRIPT_DIR/config/clients.d/network-toolkit.conf" > "$RADIUS_DIR/clients.d/eap-tls.conf"
+chown root:freerad "$RADIUS_DIR/clients.d/eap-tls.conf"
 chmod 0640 "$RADIUS_DIR/clients.d/eap-tls.conf"
 if ! grep -Eq '^\$INCLUDE[[:space:]]+clients\.d/' "$RADIUS_DIR/clients.conf"; then
   printf '\n$INCLUDE clients.d/\n' >> "$RADIUS_DIR/clients.conf"
