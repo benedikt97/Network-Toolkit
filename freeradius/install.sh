@@ -43,6 +43,7 @@ apt-get install -y freeradius freeradius-utils openssl gettext-base
 [[ -d $RADIUS_DIR ]] || { echo "Expected FreeRADIUS 3 configuration at $RADIUS_DIR." >&2; exit 1; }
 
 install -d -m 0750 "$CERT_DIR" "$CERT_DIR/ca" "$CERT_DIR/endpoints"
+install -d -m 0755 "$RADIUS_DIR/clients.d"
 install -m 0700 "$SCRIPT_DIR/certctl.sh" /usr/local/sbin/freeradius-certctl
 envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/openssl-ca.cnf" > "$CERT_DIR/openssl-ca.cnf"
 chmod 0640 "$CERT_DIR/openssl-ca.cnf"
@@ -55,8 +56,8 @@ done
 
 envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/mods-enabled/eap" > "$RADIUS_DIR/mods-enabled/eap"
 chmod 0640 "$RADIUS_DIR/mods-enabled/eap"
-envsubst '${NAS_IP} ${NAS_SECRET}' < "$SCRIPT_DIR/config/clients.d/network-toolkit.conf" > "$RADIUS_DIR/clients.d/network-toolkit.conf"
-chmod 0640 "$RADIUS_DIR/clients.d/network-toolkit.conf"
+envsubst '${NAS_IP} ${NAS_SECRET}' < "$SCRIPT_DIR/config/clients.d/network-toolkit.conf" > "$RADIUS_DIR/clients.d/eap-tls.conf"
+chmod 0640 "$RADIUS_DIR/clients.d/eap-tls.conf"
 if ! grep -Eq '^\$INCLUDE[[:space:]]+clients\.d/' "$RADIUS_DIR/clients.conf"; then
   printf '\n$INCLUDE clients.d/\n' >> "$RADIUS_DIR/clients.conf"
 fi

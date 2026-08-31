@@ -13,7 +13,7 @@ sudo ./install.sh --nas-ip 192.0.2.10 --nas-secret 'use-a-long-random-shared-sec
 
 The installer installs `freeradius`, `freeradius-utils`, `openssl`, and `gettext-base` (for `envsubst`); saves replaced configuration files in `/etc/freeradius/3.0/.eap-tls-backup-*`; creates a private CA; and starts the service. Certificate material is stored under `/etc/freeradius/3.0/certs/<hostname>/`, using the server's short hostname. Allow UDP/1812 from the authenticator to the server in the firewall.
 
-For more authenticators, add one `client` block to `/etc/freeradius/3.0/clients.d/network-toolkit.conf`, then run `sudo systemctl reload freeradius`.
+For more authenticators, add one `client` block to `/etc/freeradius/3.0/clients.d/eap-tls.conf`, then run `sudo systemctl reload freeradius`.
 
 ## Endpoint certificates
 
