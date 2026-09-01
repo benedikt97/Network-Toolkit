@@ -15,6 +15,16 @@ The installer installs `freeradius`, `freeradius-utils`, `openssl`, and `gettext
 
 For more authenticators, add one `client` block to `/etc/freeradius/3.0/clients.d/eap-tls.conf`, then run `sudo systemctl reload freeradius`.
 
+## RadSec (optional)
+
+Add `--radsec` during installation to enable RADIUS-over-TLS (RadSec) on TCP port 2083:
+
+```bash
+sudo ./install.sh --nas-ip 192.0.2.10 --nas-secret 'use-a-long-random-shared-secret' --server-name radius.example.net --radsec
+```
+
+RadSec requires the switch to present a certificate issued by this server's CA. Create one with `sudo freeradius-certctl issue access-switch-01`, install its `.p12` bundle and the CA certificate on the switch, and configure the switch to use RadSec on TCP/2083. Keep the switch's `client` block in `eap-tls.conf`; it identifies the permitted switch source address and shared secret. Allow TCP/2083 through the firewall in addition to UDP/1812 when both transports are in use.
+
 ## Endpoint certificates
 
 Create a bundle for an EOS endpoint:

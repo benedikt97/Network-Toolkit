@@ -1,0 +1,30 @@
+# RadSec listener (RADIUS over mutually authenticated TLS), RFC 6614.
+# Enabled by install.sh --radsec.
+server radsec {
+	listen {
+		type = auth
+		ipaddr = *
+		port = 2083
+		proto = tcp
+
+		tls {
+			private_key_file = ${CERT_DIR}/server.key
+			certificate_file = ${CERT_DIR}/server.crt
+			ca_path = ${CERT_DIR}/ca
+			check_crl = yes
+			require_client_cert = yes
+			private_key_password = ""
+			cipher_list = "DEFAULT@SECLEVEL=2"
+			tls_min_version = "1.2"
+			tls_max_version = "1.3"
+		}
+	}
+
+	authorize {
+		eap
+	}
+
+	authenticate {
+		eap
+	}
+}

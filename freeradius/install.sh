@@ -4,22 +4,25 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./install.sh --nas-ip ADDRESS --nas-secret SECRET [--server-name DNS_NAME]
+Usage: sudo ./install.sh --nas-ip ADDRESS --nas-secret SECRET [--server-name DNS_NAME] [--radsec]
 
 --nas-ip       IP address of the switch/authenticator that will send RADIUS.
 --nas-secret   Shared RADIUS secret (use a long, random value).
 --server-name  DNS name placed in the RADIUS server certificate (default: hostname -f).
+--radsec       Enable mutual-TLS RadSec on TCP port 2083.
 EOF
 }
 
 NAS_IP=""
 NAS_SECRET=""
 SERVER_NAME="$(hostname -f 2>/dev/null || hostname)"
+RADSEC=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --nas-ip) NAS_IP=${2:?missing value}; shift 2 ;;
     --nas-secret) NAS_SECRET=${2:?missing value}; shift 2 ;;
     --server-name) SERVER_NAME=${2:?missing value}; shift 2 ;;
+    --radsec) RADSEC=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -50,7 +53,7 @@ chmod 0640 "$CERT_DIR/openssl-ca.cnf"
 
 backup="$RADIUS_DIR/.eap-tls-backup-$STAMP"
 install -d -m 0700 "$backup"
-for file in "$RADIUS_DIR/mods-enabled/eap" "$RADIUS_DIR/clients.conf"; do
+for file in "$RADIUS_DIR/mods-enabled/eap" "$RADIUS_DIR/clients.conf" "$RADIUS_DIR/sites-enabled/radsec"; do
   [[ -e $file || -L $file ]] && cp -a "$file" "$backup/"
 done
 
@@ -62,6 +65,11 @@ chown root:freerad "$RADIUS_DIR/clients.d/eap-tls.conf"
 chmod 0640 "$RADIUS_DIR/clients.d/eap-tls.conf"
 if ! grep -Eq '^\$INCLUDE[[:space:]]+clients\.d/' "$RADIUS_DIR/clients.conf"; then
   printf '\n$INCLUDE clients.d/\n' >> "$RADIUS_DIR/clients.conf"
+fi
+if [[ $RADSEC == true ]]; then
+  envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/sites-enabled/radsec" > "$RADIUS_DIR/sites-enabled/radsec"
+  chown root:freerad "$RADIUS_DIR/sites-enabled/radsec"
+  chmod 0640 "$RADIUS_DIR/sites-enabled/radsec"
 fi
 
 if [[ ! -f $CERT_DIR/ca/ca.crt ]]; then
@@ -80,3 +88,4 @@ systemctl restart freeradius
 
 echo "Installed successfully. Original files (if present): $backup"
 echo "Create an Arista endpoint bundle: sudo freeradius-certctl issue arista-eos-01"
+[[ $RADSEC == true ]] && echo 'RadSec is enabled on TCP/2083; issue and install a client certificate for each RadSec switch.'
