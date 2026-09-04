@@ -30,10 +30,12 @@ RadSec requires the switch to present a certificate issued by this server's CA. 
 Create a bundle for an EOS endpoint:
 
 ```bash
-sudo freeradius-certctl issue arista-eos-01
+sudo freeradius-certctl issue arista-eos-01 --vlan 120
 ```
 
-It produces the endpoint certificate, private key, and an encrypted PKCS#12 bundle in `/etc/freeradius/3.0/certs/<hostname>/endpoints/`. Securely copy the `.p12` bundle and CA certificate to the endpoint/provisioning system. The export password is prompted by OpenSSL and is intentionally never stored.
+It produces the endpoint certificate, private key, and an encrypted PKCS#12 bundle in `/etc/freeradius/3.0/certs/<hostname>/endpoints/`. Securely copy the `.p12` bundle and CA certificate to the endpoint/provisioning system. The export password is prompted by OpenSSL and is intentionally never stored. `--vlan` is optional; when supplied, it creates a CN-to-VLAN entry in `/etc/freeradius/3.0/certs/<hostname>/cn-vlan` and reloads FreeRADIUS.
+
+During EAP-TLS, FreeRADIUS requires an endpoint certificate issued by this CA, checks it against the current CRL, and requires the EAP identity to match the certificate Common Name. After successful certificate validation, it looks up that validated certificate CN in the CN-to-VLAN file and returns the standard VLAN tunnel attributes (`Tunnel-Type`, `Tunnel-Medium-Type`, and `Tunnel-Private-Group-ID`). Revoking an endpoint certificate also removes its VLAN entry.
 
 Useful commands:
 

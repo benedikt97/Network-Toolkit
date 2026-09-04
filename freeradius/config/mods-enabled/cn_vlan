@@ -1,0 +1,6 @@
+# Managed by Network-Toolkit. The key is populated only after EAP-TLS has
+# validated the endpoint certificate, so VLAN assignments are bound to its CN.
+files cn_vlan {
+	filename = ${CERT_DIR}/cn-vlan
+	key = "%{TLS-Client-Cert-Common-Name}"
+}

@@ -1,0 +1,21 @@
+# Managed by Network-Toolkit. This server accepts EAP-TLS only.
+server default {
+	listen {
+		type = auth
+		ipaddr = *
+		port = 1812
+	}
+
+	authorize {
+		eap
+	}
+
+	authenticate {
+		eap
+	}
+
+	# EAP-TLS has verified the client certificate and exposed its subject here.
+	post-auth {
+		cn_vlan
+	}
+}

@@ -8,6 +8,10 @@ eap {
 		private_key_file = ${CERT_DIR}/server.key
 		certificate_file = ${CERT_DIR}/server.crt
 		ca_path = ${CERT_DIR}/ca
+		# Reject endpoints which do not present a certificate issued by this CA.
+		require_client_cert = yes
+		# The EAP identity must be the Common Name in the endpoint certificate.
+		check_cert_cn = %{User-Name}
 		check_crl = yes
 		private_key_password = ""
 		cipher_list = "DEFAULT@SECLEVEL=2"

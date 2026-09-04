@@ -53,13 +53,21 @@ chmod 0640 "$CERT_DIR/openssl-ca.cnf"
 
 backup="$RADIUS_DIR/.eap-tls-backup-$STAMP"
 install -d -m 0700 "$backup"
-for file in "$RADIUS_DIR/mods-enabled/eap" "$RADIUS_DIR/clients.conf" "$RADIUS_DIR/sites-enabled/radsec"; do
+for file in "$RADIUS_DIR/mods-enabled/eap" "$RADIUS_DIR/mods-enabled/cn_vlan" "$RADIUS_DIR/clients.conf" "$RADIUS_DIR/sites-enabled/default" "$RADIUS_DIR/sites-enabled/radsec"; do
   [[ -e $file || -L $file ]] && cp -a "$file" "$backup/"
 done
 
 envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/mods-enabled/eap" > "$RADIUS_DIR/mods-enabled/eap"
 chown root:freerad "$RADIUS_DIR/mods-enabled/eap"
 chmod 0640 "$RADIUS_DIR/mods-enabled/eap"
+envsubst '${CERT_DIR}' < "$SCRIPT_DIR/config/mods-enabled/cn_vlan" > "$RADIUS_DIR/mods-enabled/cn_vlan"
+chown root:freerad "$RADIUS_DIR/mods-enabled/cn_vlan"
+chmod 0640 "$RADIUS_DIR/mods-enabled/cn_vlan"
+install -m 0640 "$SCRIPT_DIR/config/sites-enabled/default" "$RADIUS_DIR/sites-enabled/default"
+chown root:freerad "$RADIUS_DIR/sites-enabled/default"
+touch "$CERT_DIR/cn-vlan"
+chown root:freerad "$CERT_DIR/cn-vlan"
+chmod 0640 "$CERT_DIR/cn-vlan"
 envsubst '${NAS_IP} ${NAS_SECRET}' < "$SCRIPT_DIR/config/clients.d/network-toolkit.conf" > "$RADIUS_DIR/clients.d/eap-tls.conf"
 chown root:freerad "$RADIUS_DIR/clients.d/eap-tls.conf"
 chmod 0640 "$RADIUS_DIR/clients.d/eap-tls.conf"

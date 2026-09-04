@@ -27,4 +27,8 @@ server radsec {
 	authenticate {
 		eap
 	}
+
+	post-auth {
+		cn_vlan
+	}
 }
