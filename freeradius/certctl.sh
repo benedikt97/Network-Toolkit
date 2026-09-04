@@ -103,6 +103,18 @@ revoke() {
   echo "Revoked $name and reloaded FreeRADIUS."
 }
 
+list() {
+  need_ca
+  cat "$CA_DIR/index.txt"
+  echo
+  echo 'CN-to-VLAN assignments:'
+  if [[ -s $CN_VLAN_FILE ]]; then
+    cat "$CN_VLAN_FILE"
+  else
+    echo '  (none)'
+  fi
+}
+
 case ${1:-} in
   init-ca) need_root; init_ca ;;
   issue) need_root
@@ -117,7 +129,7 @@ case ${1:-} in
          ;;
   issue-server) need_root; [[ $# -eq 2 ]] || die 'usage: issue-server DNS_NAME'; issue server "$2" ;;
   revoke) need_root; [[ $# -eq 2 ]] || die 'usage: revoke ENDPOINT_NAME'; revoke "$2" ;;
-  list) need_ca; cat "$CA_DIR/index.txt" ;;
+  list) list ;;
   *) cat <<'EOF'
 Usage: freeradius-certctl {init-ca|issue ENDPOINT [--vlan VLAN]|issue-server DNS_NAME|revoke ENDPOINT|list}
 EOF
